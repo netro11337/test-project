@@ -111,6 +111,70 @@ class SecondAPIClient(BaseAPIClient):
         return self.post("/v2/records", json=payload).json()
 
 
+# --- SMS-приёмник (например, sms-activate.org) -----------------------------
+
+SMS_ACTIVATE_URL = "https://api.sms-activate.org/stubs/handler_api.php"
+
+
+class SMSActivateError(RuntimeError):
+    """Ошибка, возвращённая API сервиса приёма SMS (например, BAD_KEY)."""
+
+
+def get_phone_number(
+    api_key: str,
+    service_code: str,
+    *,
+    session: Optional[requests.Session] = None,
+    timeout: float = 15.0,
+) -> tuple[str, str]:
+    """Запрашивает номер телефона у сервиса приёма SMS.
+
+    Отправляет GET-запрос вида
+        ?api_key=...&action=getNumber&service=<service_code>
+    и парсит успешный ответ формата ``ACCESS_NUMBER:ID:NUMBER``.
+
+    Args:
+        api_key: Ключ доступа к API сервиса.
+        service_code: Код сервиса, для которого нужен номер (например, "vk", "tg").
+        session: Необязательная requests.Session; если не передана — создаётся
+            новая со случайным User-Agent.
+        timeout: Таймаут запроса в секундах.
+
+    Returns:
+        Кортеж ``(activation_id, phone_number)``.
+
+    Raises:
+        SMSActivateError: Если сервис вернул ошибку (например, NO_NUMBERS,
+            BAD_KEY, BAD_SERVICE) или ответ не распознан.
+    """
+    if session is None:
+        session = build_session()
+
+    params = {
+        "api_key": api_key,
+        "action": "getNumber",
+        "service": service_code,
+    }
+
+    logger.info("Запрос номера для сервиса '%s'", service_code)
+    response = session.get(SMS_ACTIVATE_URL, params=params, timeout=timeout)
+    response.raise_for_status()
+
+    body = response.text.strip()
+
+    # Успех: ACCESS_NUMBER:ID:NUMBER
+    if body.startswith("ACCESS_NUMBER:"):
+        parts = body.split(":")
+        if len(parts) >= 3:
+            activation_id, phone_number = parts[1], parts[2]
+            logger.info("Получен номер %s (ID активации %s)", phone_number, activation_id)
+            return activation_id, phone_number
+        raise SMSActivateError(f"Не удалось разобрать ответ: {body!r}")
+
+    # Любой другой ответ — это код ошибки сервиса (BAD_KEY, NO_NUMBERS и т.п.).
+    raise SMSActivateError(f"API вернул ошибку: {body!r}")
+
+
 def main() -> None:
     # Одна сессия — общие куки и заголовки для обоих API.
     session = build_session()
@@ -124,7 +188,12 @@ def main() -> None:
     #     result = second_api.create_record({"source": items})
     #     logger.info("Готово: %s", result)
     #
-    # Пока это заготовка — раскомментируйте после указания реальных URL.
+    # Пример работы с сервисом приёма SMS (та же сессия — общий User-Agent):
+    #
+    #     activation_id, phone = get_phone_number("YOUR_API_KEY", "vk", session=session)
+    #     logger.info("ID активации %s, номер %s", activation_id, phone)
+    #
+    # Пока это заготовка — раскомментируйте после указания реальных ключей/URL.
     logger.info("Клиенты готовы: %s, %s", first_api.base_url, second_api.base_url)
 
 
