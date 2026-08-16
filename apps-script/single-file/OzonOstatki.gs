@@ -77,6 +77,10 @@ var CONFIG = {
   //   warehouse        — склад; можно не указывать, если склад в ЛК один
   //   outputFolderId   — можно не указывать, тогда общая папка OUTPUT_FOLDER_ID
   //   idHeader         — если колонка с кодом товара названа необычно
+  //   templateFile     — часть имени файла шаблона. Нужен, только если
+  //                      шаблоны нескольких магазинов лежат в одной папке:
+  //                      тогда переименуйте их («ГМС шаблон.xlsx») и укажите
+  //                      здесь «ГМС». Отдельные папки — поле не нужно.
   //
   // Ozon работает по артикулу продавца, Wildberries — по баркоду. Скрипт сам
   // ищет нужную колонку и в вашем листе, и в шаблоне: для 'ozon' сначала
@@ -529,7 +533,8 @@ function shopsList_() {
       outputFolderId: raw[i].outputFolderId || CONFIG.OUTPUT_FOLDER_ID,
       warehouse: raw[i].warehouse || '',
       platform: raw[i].platform === 'wb' ? 'wb' : 'ozon',
-      idHeader: raw[i].idHeader || ''
+      idHeader: raw[i].idHeader || '',
+      templateFile: raw[i].templateFile || ''
     });
   }
 
@@ -541,32 +546,54 @@ function shopsList_() {
       outputFolderId: CONFIG.OUTPUT_FOLDER_ID,
       warehouse: CONFIG.WAREHOUSE_NAME,
       platform: 'ozon',
-      idHeader: ''
+      idHeader: '',
+      templateFile: ''
     });
   }
   return list;
 }
 
 /**
- * У каждого кабинета свой шаблон со своим списком складов. Общая папка на
- * несколько магазинов означала бы, что все файлы уедут на склад первого,
- * — это молча испортило бы остатки, поэтому останавливаемся сразу.
+ * У каждого кабинета свой шаблон со своим списком складов, и перепутать их
+ * — значит молча отправить остатки на чужой склад. Поэтому магазины должны
+ * различаться либо папкой, либо именем файла внутри общей папки.
  */
 function assertDistinctTemplates_(shops) {
   if (shops.length < 2) return;
-  var seen = {};
-  for (var i = 0; i < shops.length; i++) {
-    var id = shops[i].templateFolderId;
-    if (!id) {
+
+  var byFolder = {};
+  var i;
+
+  for (i = 0; i < shops.length; i++) {
+    if (!shops[i].templateFolderId) {
       throw new Error('У магазина «' + shops[i].name +
         '» не указана папка с шаблоном (templateFolderId).');
     }
-    if (seen[id]) {
-      throw new Error('Магазины «' + seen[id] + '» и «' + shops[i].name +
-        '» указывают на одну папку с шаблоном. У каждого кабинета должен быть ' +
-        'свой шаблон — иначе остатки уедут не на тот склад.');
+    var id = shops[i].templateFolderId;
+    if (!byFolder[id]) byFolder[id] = [];
+    byFolder[id].push(shops[i]);
+  }
+
+  for (var folder in byFolder) {
+    if (!Object.prototype.hasOwnProperty.call(byFolder, folder)) continue;
+    var group = byFolder[folder];
+    if (group.length < 2) continue;
+
+    var patterns = {};
+    for (i = 0; i < group.length; i++) {
+      var pat = normHeader_(group[i].templateFile);
+      if (!pat) {
+        throw new Error('Магазины ' + group.map(function (s) { return '«' + s.name + '»'; }).join(', ') +
+          ' смотрят в одну папку с шаблонами. Тогда у каждого нужно указать ' +
+          'templateFile — часть имени его файла, иначе непонятно, чей шаблон брать.');
+      }
+      if (patterns[pat]) {
+        throw new Error('У магазинов «' + patterns[pat] + '» и «' + group[i].name +
+          '» одинаковый templateFile («' + group[i].templateFile +
+          '»). Имена файлов должны различаться.');
+      }
+      patterns[pat] = group[i].name;
     }
-    seen[id] = shops[i].name;
   }
 }
 
@@ -632,7 +659,7 @@ function fillOneShop_(shop) {
   // видно по имени файла и по названию магазина.
   var outFolder = folderById_(shop.outputFolderId, 'готовые файлы');
 
-  var templateFile = latestTemplateFile_(templateFolder);
+  var templateFile = latestTemplateFile_(templateFolder, shop.templateFile);
   var tmpId = convertToSheet_(templateFile, 'tmp-ozon-' + stamp_());
 
   try {
@@ -668,7 +695,7 @@ function checkTemplates() {
     var tmpId = null;
     try {
       var folder = folderById_(shop.templateFolderId, 'шаблон ' + shop.name);
-      var file = latestTemplateFile_(folder);
+      var file = latestTemplateFile_(folder, shop.templateFile);
       lines.push('Папка: ' + folder.getName());
       lines.push('Файл: ' + file.getName());
 
@@ -714,22 +741,37 @@ function outputFileName_(shop) {
     (shop && shop.name ? slug_(shop.name) + '-' : '') + stamp_() + '.xlsx';
 }
 
-/** Самый свежий .xls/.xlsx в папке с шаблонами. */
-function latestTemplateFile_(folder) {
+/**
+ * Шаблон магазина в папке. Если задан templateFile, берётся файл, в имени
+ * которого он встречается, — так несколько шаблонов могут лежать в одной
+ * папке. Иначе берётся самый свежий файл.
+ */
+function latestTemplateFile_(folder, pattern) {
+  var pat = normHeader_(pattern || '');
   var files = folder.getFiles();
   var best = null;
+  var seen = [];
+
   while (files.hasNext()) {
     var f = files.next();
-    var name = f.getName().toLowerCase();
-    if (name.indexOf('.xls') === -1) continue;
-    if (name.indexOf('ostatki-') === 0) continue;        // это наш же результат
+    var name = f.getName();
+    var low = normHeader_(name);
+    if (low.indexOf('.xls') === -1) continue;
+    if (low.indexOf('ostatki-') === 0) continue;         // это наш же результат
+    seen.push(name);
+    if (pat && low.indexOf(pat) === -1) continue;
     if (!best || f.getLastUpdated() > best.getLastUpdated()) best = f;
   }
-  if (!best) {
-    throw new Error('В папке «' + folder.getName() +
-      '» нет ни одного файла .xls/.xlsx. Положите туда шаблон, скачанный из ЛК.');
+
+  if (best) return best;
+
+  if (pat) {
+    throw new Error('В папке «' + folder.getName() + '» нет файла .xls/.xlsx ' +
+      'со словом «' + pattern + '» в названии. Что лежит в папке: ' +
+      (seen.length ? seen.join(', ') : 'ничего подходящего') + '.');
   }
-  return best;
+  throw new Error('В папке «' + folder.getName() +
+    '» нет ни одного файла .xls/.xlsx. Положите туда шаблон, скачанный из ЛК.');
 }
 
 /**

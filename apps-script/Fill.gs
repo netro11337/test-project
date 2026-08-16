@@ -56,7 +56,7 @@ function fillOneShop_(shop) {
   // видно по имени файла и по названию магазина.
   var outFolder = folderById_(shop.outputFolderId, 'готовые файлы');
 
-  var templateFile = latestTemplateFile_(templateFolder);
+  var templateFile = latestTemplateFile_(templateFolder, shop.templateFile);
   var tmpId = convertToSheet_(templateFile, 'tmp-ozon-' + stamp_());
 
   try {
@@ -92,7 +92,7 @@ function checkTemplates() {
     var tmpId = null;
     try {
       var folder = folderById_(shop.templateFolderId, 'шаблон ' + shop.name);
-      var file = latestTemplateFile_(folder);
+      var file = latestTemplateFile_(folder, shop.templateFile);
       lines.push('Папка: ' + folder.getName());
       lines.push('Файл: ' + file.getName());
 
@@ -138,22 +138,37 @@ function outputFileName_(shop) {
     (shop && shop.name ? slug_(shop.name) + '-' : '') + stamp_() + '.xlsx';
 }
 
-/** Самый свежий .xls/.xlsx в папке с шаблонами. */
-function latestTemplateFile_(folder) {
+/**
+ * Шаблон магазина в папке. Если задан templateFile, берётся файл, в имени
+ * которого он встречается, — так несколько шаблонов могут лежать в одной
+ * папке. Иначе берётся самый свежий файл.
+ */
+function latestTemplateFile_(folder, pattern) {
+  var pat = normHeader_(pattern || '');
   var files = folder.getFiles();
   var best = null;
+  var seen = [];
+
   while (files.hasNext()) {
     var f = files.next();
-    var name = f.getName().toLowerCase();
-    if (name.indexOf('.xls') === -1) continue;
-    if (name.indexOf('ostatki-') === 0) continue;        // это наш же результат
+    var name = f.getName();
+    var low = normHeader_(name);
+    if (low.indexOf('.xls') === -1) continue;
+    if (low.indexOf('ostatki-') === 0) continue;         // это наш же результат
+    seen.push(name);
+    if (pat && low.indexOf(pat) === -1) continue;
     if (!best || f.getLastUpdated() > best.getLastUpdated()) best = f;
   }
-  if (!best) {
-    throw new Error('В папке «' + folder.getName() +
-      '» нет ни одного файла .xls/.xlsx. Положите туда шаблон, скачанный из ЛК.');
+
+  if (best) return best;
+
+  if (pat) {
+    throw new Error('В папке «' + folder.getName() + '» нет файла .xls/.xlsx ' +
+      'со словом «' + pattern + '» в названии. Что лежит в папке: ' +
+      (seen.length ? seen.join(', ') : 'ничего подходящего') + '.');
   }
-  return best;
+  throw new Error('В папке «' + folder.getName() +
+    '» нет ни одного файла .xls/.xlsx. Положите туда шаблон, скачанный из ЛК.');
 }
 
 /**
