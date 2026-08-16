@@ -14,16 +14,21 @@ class RoundsTest(unittest.TestCase):
             runner_module.create_driver,
             runner_module.quit_driver,
             runner_module.warm_up,
+            runner_module.probe_debug_ports,
         )
         runner_module.create_driver = lambda *a, **k: object()
         runner_module.quit_driver = lambda *a, **k: None
         runner_module.warm_up = lambda *a, **k: True
+        # По умолчанию считаем, что запущен один браузер пользователя.
+        self.browsers = ["127.0.0.1:9222"]
+        runner_module.probe_debug_ports = lambda cfg, wanted: list(self.browsers)
 
     def tearDown(self):
         (
             runner_module.create_driver,
             runner_module.quit_driver,
             runner_module.warm_up,
+            runner_module.probe_debug_ports,
         ) = self._saved
 
     def _runner(self, batches, **overrides):
@@ -60,6 +65,7 @@ class RoundsTest(unittest.TestCase):
 
     def test_warns_when_clearing_is_off_for_several_rounds(self):
         # Без очистки второй круг унаследует товары первого, и ссылка соврёт.
+        # Браузер один, значит вкладки пойдут кругами в нём же.
         runner, events = self._runner(
             [["111111111"], ["222222222"]], clear_cart_after=False
         )
@@ -87,6 +93,36 @@ class RoundsTest(unittest.TestCase):
         runner.run()
         self.assertEqual(len(self.collected), 1, "отмена не остановила круги")
 
+
+
+
+class MultipleBrowsersTest(RoundsTest):
+    """Несколько браузеров пользователя работают параллельно."""
+
+    def test_each_browser_takes_its_own_tabs(self):
+        self.browsers = ["127.0.0.1:9222", "127.0.0.1:9223"]
+        runner, _ = self._runner([["1" * 9], ["2" * 9], ["3" * 9]])
+        carts = runner.run()
+        self.assertEqual(len(carts), 3)
+        self.assertEqual(sorted(tid for tid, _ in self.collected), [1, 2, 3])
+
+    def test_tabs_are_spread_across_browsers(self):
+        # Три вкладки на два браузера: первый берёт 1 и 3, второй — 2.
+        self.browsers = ["127.0.0.1:9222", "127.0.0.1:9223"]
+        runner, events = self._runner([["1" * 9], ["2" * 9], ["3" * 9]])
+        runner.run()
+        spread = [e.message for e in events if "вкладки" in e.message]
+        self.assertIn("Браузер 127.0.0.1:9222: вкладки 1, 3", spread)
+        self.assertIn("Браузер 127.0.0.1:9223: вкладки 2", spread)
+
+    def test_no_browser_running_is_reported(self):
+        self.browsers = []
+        runner, events = self._runner([["1" * 9]])
+        carts = runner.run()
+        self.assertEqual(carts, [])
+        self.assertTrue(
+            any("Ни один браузер не отвечает" in e.message for e in events)
+        )
 
 if __name__ == "__main__":
     unittest.main()

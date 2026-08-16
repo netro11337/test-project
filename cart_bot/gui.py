@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import queue
-import socket
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -15,7 +14,14 @@ from . import __version__
 from .clipboard import enable_clipboard_hotkeys
 from .config import Settings, ensure_app_dir
 from .markets import DEFAULT_MARKET, MARKETS
-from .runner import CartResult, CartRunner, Event, EventKind, open_cart_in_browser
+from .driver import probe_debug_ports
+from .runner import (
+    CartResult,
+    CartRunner,
+    Event,
+    EventKind,
+    open_cart_in_browser,
+)
 from .skus import MAX_SKU, MIN_SKU, dedupe_batches, parse_skus, split_evenly
 from .worker import Outcome
 
@@ -225,9 +231,9 @@ class CartBotApp(ttk.Frame):
     def _on_attach_change(self) -> None:
         if self.attach_var.get():
             self._append_log(
-                "Режим «мой Chrome»: вкладки идут по очереди, кругами — у "
-                "каждой своя корзина и своя ссылка, между кругами корзина "
-                "очищается. Галки Headless и «Без картинок» не действуют."
+                "Режим «мой Chrome»: сколько браузеров запущено, столько "
+                "вкладок идёт параллельно; остальные — вторым кругом. Галки "
+                "Headless и «Без картинок» не действуют."
             )
         else:
             self._append_log("Вернулся к собственным профилям браузера.")
@@ -236,16 +242,17 @@ class CartBotApp(ttk.Frame):
         messagebox.showinfo(
             "Как работать в своём Chrome",
             "1. Закройте все окна Chrome.\n\n"
-            "2. Запустите «Chrome с отладкой.bat» из этой же папки. Откроется "
-            "обычный Chrome, но с открытым портом для управления.\n\n"
+            "2. Запустите «Chrome с отладкой.bat» из этой же папки. Он спросит, "
+            "сколько браузеров открыть — укажите столько же, сколько потоков в "
+            "программе, и они будут работать параллельно, каждый со своей "
+            "корзиной и ссылкой.\n\n"
             "3. Войдите в нём в Озон и немного полистайте сайт — этот профиль "
             "сохраняется, и чем он обжитее, тем меньше к нему вопросов.\n\n"
             "4. Не закрывая браузер, нажмите «Собрать корзины».\n\n"
             "Программа будет работать в этом окне: открывать товары и жать "
             "«В корзину». Браузер она не закроет — закроете сами.\n\n"
-            "Вкладки потоков выполняются по очереди, а не одновременно: "
-            "браузер один. Каждая вкладка — отдельный круг со своей ссылкой, "
-            "между кругами корзина очищается.\n\n"
+            "Если браузеров меньше, чем вкладок, лишние вкладки пойдут в тех "
+            "же браузерах вторым кругом — между кругами корзина очищается.\n\n"
             "Chrome 136 и новее не даёт управлять основным профилем, поэтому "
             "используется отдельный профиль в папке OzonCartChrome.",
         )
@@ -447,9 +454,8 @@ class CartBotApp(ttk.Frame):
         cfg.human_pace = bool(self.pace_var.get())
         cfg.clear_cart_after = bool(self.clear_var.get())
         cfg.stealth = bool(self.stealth_var.get())
-        if cfg.attach_to_chrome:
-            # Браузер один — параллелить нечего.
-            cfg.max_workers = 1
+        # В режиме «мой Chrome» параллельность задаётся числом запущенных
+        # браузеров, а не этой настройкой: раннер сам их пересчитывает.
         return cfg
 
     def _start(self) -> None:
@@ -503,19 +509,27 @@ class CartBotApp(ttk.Frame):
         Без этой проверки пользователь получил бы длинную ошибку Selenium
         вместо понятного «браузер не запущен».
         """
-        host, _, port = self.cfg.debug_address.partition(":")
-        try:
-            with socket.create_connection((host or "127.0.0.1", int(port or 9222)), 1.5):
-                return True
-        except (OSError, ValueError):
+        wanted = len([batch for batch in self._collect_batches() if batch])
+        alive = probe_debug_ports(self.cfg, wanted)
+        if not alive:
             messagebox.showerror(
                 "Chrome не найден",
                 f"По адресу {self.cfg.debug_address} никто не отвечает.\n\n"
-                "Запустите «Chrome с отладкой.bat» и не закрывайте окно "
+                "Запустите «Chrome с отладкой.bat» и не закрывайте окна "
                 "браузера, затем повторите.\n\n"
                 "Подробности — кнопка «Как запустить?».",
             )
             return False
+
+        self._append_log(
+            f"Браузеров запущено: {len(alive)}, вкладок с товарами: {wanted}."
+        )
+        if len(alive) < wanted:
+            self._append_log(
+                f"Вкладок больше, чем браузеров: лишние пойдут вторым кругом. "
+                f"Чтобы шли параллельно, запустите {wanted} браузер(ов)."
+            )
+        return True
 
     def _cancel(self) -> None:
         if self.runner:

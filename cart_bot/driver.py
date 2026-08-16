@@ -82,7 +82,27 @@ def _resolve_service() -> Optional[Service]:
         return None
 
 
-def attach_driver(cfg: Settings) -> webdriver.Chrome:
+def probe_debug_ports(cfg: Settings, wanted: int) -> list:
+    """Какие браузеры пользователя реально запущены.
+
+    Проверяем подряд идущие порты и берём столько, сколько отвечает: лучше
+    работать двумя браузерами из трёх, чем упасть на первом же отсутствующем.
+    """
+    import socket
+
+    alive = []
+    for index in range(1, max(1, wanted) + 1):
+        address = cfg.debug_address_for(index)
+        host, _, port = address.partition(":")
+        try:
+            with socket.create_connection((host, int(port)), 1.0):
+                alive.append(address)
+        except (OSError, ValueError):
+            break
+    return alive
+
+
+def attach_driver(cfg: Settings, address: Optional[str] = None) -> webdriver.Chrome:
     """Подключается к уже запущенному Chrome пользователя.
 
     Ничего не маскируем: это тот самый браузер, которым человек пользуется
@@ -91,7 +111,7 @@ def attach_driver(cfg: Settings) -> webdriver.Chrome:
     запущен, и распоряжаться им как своим нельзя.
     """
     options = Options()
-    options.debugger_address = cfg.debug_address
+    options.debugger_address = address or cfg.debug_address
     options.page_load_strategy = "eager"
 
     service = _resolve_service()
@@ -110,10 +130,11 @@ def create_driver(
     profile_dir: Path,
     headless: Optional[bool] = None,
     thread_id: int = 1,
+    debug_address: Optional[str] = None,
 ) -> webdriver.Chrome:
     """Поднимает Chrome с отключённой графикой и короткими таймаутами."""
     if cfg.attach_to_chrome:
-        return attach_driver(cfg)
+        return attach_driver(cfg, debug_address)
 
     use_headless = cfg.headless if headless is None else headless
     fingerprint = stealth_fingerprint(cfg, thread_id)

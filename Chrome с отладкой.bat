@@ -1,14 +1,16 @@
 @echo off
 cd /d "%~dp0"
+setlocal enabledelayedexpansion
 title Chrome с отладкой - для сборки корзин
 
-rem Запускает обычный Chrome с открытым портом управления (9222).
-rem Chrome 136 и новее не разрешает управлять основным профилем, поэтому
-rem используется отдельный профиль. Войдите в нём в магазин один раз -
-rem профиль сохранится и будет использоваться дальше.
+rem Поднимает несколько окон Chrome, каждое на своём порту и своём профиле.
+rem Разные профили обязательны: два процесса Chrome не делят одну папку
+rem профиля, да и корзина у каждого должна быть своя.
 
 set "PORT=9222"
-set "PROFILE=%LOCALAPPDATA%\OzonCartChrome"
+set "COUNT="
+set /p COUNT=Сколько браузеров запустить? [1]: 
+if "%COUNT%"=="" set "COUNT=1"
 
 set "CHROME="
 if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" set "CHROME=%ProgramFiles%\Google\Chrome\Application\chrome.exe"
@@ -24,11 +26,21 @@ if not defined CHROME (
     exit /b 1
 )
 
-echo Запускаю Chrome с портом управления %PORT%.
-echo Профиль: %PROFILE%
 echo.
-echo Это окно можно закрыть. Браузер закрывать НЕ надо -
-echo программа будет работать именно в нём.
-echo.
+for /l %%i in (1,1,%COUNT%) do (
+    set /a "P=%PORT% + %%i - 1"
+    set "DIR=%LOCALAPPDATA%\OzonCartChrome-%%i"
+    echo Браузер %%i: порт !P!, профиль !DIR!
+    start "" "%CHROME%" --remote-debugging-port=!P! --user-data-dir="!DIR!" https://www.ozon.ru
+    rem Пауза между запусками: одновременный старт нескольких Chrome иногда
+    rem заканчивается тем, что часть окон не поднимает порт отладки.
+    timeout /t 2 /nobreak >nul
+)
 
-start "" "%CHROME%" --remote-debugging-port=%PORT% --user-data-dir="%PROFILE%" https://www.ozon.ru
+echo.
+echo Готово. В программе поставьте столько же потоков, сколько браузеров.
+echo Войдите в магазин в каждом окне - профили сохранятся.
+echo.
+echo Это окно можно закрыть. Браузеры закрывать НЕ надо.
+echo.
+pause

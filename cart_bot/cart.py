@@ -218,16 +218,35 @@ def _visible(elements: List[WebElement]) -> List[WebElement]:
     return result
 
 
+def _looks_checked(element: WebElement) -> bool:
+    """Отмечен ли чекбокс. Учитываем и обычные input, и рисованные виджеты."""
+    try:
+        if element.is_selected():
+            return True
+    except WebDriverException:
+        pass
+    for attribute in ("checked", "aria-checked", "data-checked"):
+        try:
+            value = (element.get_attribute(attribute) or "").lower()
+        except WebDriverException:
+            continue
+        if value in ("true", "checked", "1"):
+            return True
+    return False
+
+
 def ensure_all_selected(driver: WebDriver, market: Market) -> None:
     """Отмечает чекбокс «Все», если он есть и снят.
 
-    На Wildberries кнопка «Поделиться» шарит выделенные товары, поэтому со
-    снятой галкой можно получить ссылку на половину корзины.
+    Кнопки шапки действуют на выделенные товары, поэтому со снятой галкой
+    удалится или расшарится только часть корзины. Состояние проверяем ещё и по
+    атрибутам: у рисованного чекбокса is_selected() врёт, и клик по уже
+    отмеченному снял бы выделение — ровно наоборот тому, что нужно.
     """
     for xpath in market.select_all:
         for element in _visible(driver.find_elements(By.XPATH, xpath)):
             try:
-                if not element.is_selected():
+                if not _looks_checked(element):
                     driver.execute_script("arguments[0].click();", element)
                     log.debug("Отметил «Все» по селектору %s", xpath)
                 return
@@ -536,6 +555,24 @@ def find_clear_button(
     return neighbour, f"сосед «Поделиться» {market.clear_side}"
 
 
+# Сколько раз повторять удаление. Хватает и на поштучное удаление большой
+# корзины, но не даёт зациклиться, если кнопка вообще ничего не делает.
+_CLEAR_PASSES = 25
+
+
+def _wait_for_fewer(
+    driver: WebDriver, market: Market, before: int, timeout: float
+) -> int:
+    """Ждёт, пока позиций станет меньше. Возвращает итоговое количество."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        now = count_items(driver, market)
+        if now == 0 or (now >= 0 and now < before):
+            return now
+        time.sleep(0.2)
+    return count_items(driver, market)
+
+
 def _confirm_clear(driver: WebDriver, cfg: Settings, market: Market) -> bool:
     """Жмёт «Удалить» в окне подтверждения. False — окна не было."""
     deadline = time.monotonic() + min(3.0, cfg.element_timeout)
@@ -568,31 +605,47 @@ def clear_cart(driver: WebDriver, cfg: Settings) -> Tuple[bool, str]:
     if count_items(driver, market) == 0:
         return True, "корзина и так пуста"
 
-    ensure_all_selected(driver, market)
+    # Один клик может убрать не всё: кнопка действует на выделенное, а у
+    # товаров есть свои иконки удаления. Поэтому давим циклом, пока корзина
+    # не опустеет, и останавливаемся, как только проход перестал помогать.
+    routes = []
+    for attempt in range(1, _CLEAR_PASSES + 1):
+        before = count_items(driver, market)
+        if before == 0:
+            return True, f"корзина очищена ({', '.join(routes) or 'сразу'})"
+        if before < 0:
+            return False, "не смог пересчитать корзину"
 
-    button, how = find_clear_button(driver, cfg, market)
-    if button is None:
-        return False, "кнопка удаления не найдена"
-    if not _click(driver, button):
-        return False, f"кнопка удаления найдена ({how}), но не нажалась"
+        ensure_all_selected(driver, market)
 
-    time.sleep(cfg.micro_pause)
+        button, how = find_clear_button(driver, cfg, market)
+        if button is None:
+            return False, f"кнопка удаления не найдена (осталось {before})"
+        if not _click(driver, button):
+            return False, f"кнопка удаления найдена ({how}), но не нажалась"
 
-    # Магазин переспрашивает: окно «Удалить товары» с кнопкой «Удалить».
-    # Окно появляется не мгновенно, поэтому именно ждём его, а не заглядываем
-    # один раз: без подтверждения корзина останется полной.
-    confirmed = _confirm_clear(driver, cfg, market)
-    if confirmed:
-        how += " + подтверждение"
+        time.sleep(cfg.micro_pause)
 
-    deadline = time.monotonic() + cfg.element_timeout
-    while time.monotonic() < deadline:
-        if count_items(driver, market) == 0:
-            return True, f"корзина очищена ({how})"
-        time.sleep(0.2)
+        # Магазин переспрашивает: окно «Удалить товары» с кнопкой «Удалить».
+        # Окно появляется не мгновенно, поэтому именно ждём его, а не
+        # заглядываем один раз: без подтверждения корзина останется полной.
+        if _confirm_clear(driver, cfg, market):
+            how += " + подтверждение"
+        if how not in routes:
+            routes.append(how)
+
+        after = _wait_for_fewer(driver, market, before, cfg.element_timeout)
+        if after == 0:
+            return True, f"корзина очищена за {attempt} проход(ов): {', '.join(routes)}"
+        if after >= before:
+            return False, (
+                f"проход {attempt} ничего не удалил ({how}), "
+                f"в корзине осталось {after}"
+            )
+        log.debug("Проход %s: было %s, стало %s", attempt, before, after)
 
     left = count_items(driver, market)
-    return False, f"нажал кнопку ({how}), но в корзине осталось позиций: {left}"
+    return False, f"после {_CLEAR_PASSES} проходов в корзине осталось {left}"
 
 
 def read_cart_summary(driver: WebDriver, cfg: Settings) -> Tuple[ShareResult, int]:

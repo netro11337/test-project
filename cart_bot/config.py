@@ -111,6 +111,19 @@ class Settings:
     def market(self) -> Market:
         return get_market(self.market_key)
 
+    def debug_address_for(self, index: int) -> str:
+        """Адрес N-го браузера пользователя.
+
+        Браузеры поднимаются на соседних портах (9222, 9223, ...), у каждого
+        свой профиль — иначе Chrome не даст запустить второй экземпляр.
+        """
+        host, _, port = self.debug_address.partition(":")
+        try:
+            base = int(port or 9222)
+        except ValueError:
+            base = 9222
+        return f"{host or '127.0.0.1'}:{base + max(0, index - 1)}"
+
     def profile_for(self, thread_id: int) -> Path:
         """Профиль потока. Разведён по маркетплейсам, чтобы корзины Ozon и
         Wildberries не делили одну сессию Chrome."""

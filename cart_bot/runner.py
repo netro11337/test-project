@@ -23,6 +23,7 @@ from .cart import (
 from .config import Settings, ensure_app_dir
 from .driver import (
     apply_resource_blocking,
+    probe_debug_ports,
     clear_resource_blocking,
     create_driver,
     quit_driver,
@@ -121,7 +122,7 @@ class CartRunner:
             return []
 
         if self.cfg.attach_to_chrome:
-            return self._run_rounds(active)
+            return self._run_attached(active)
 
         # Больше воркеров, чем непустых потоков, поднимать незачем.
         workers = min(self.cfg.max_workers, len(active))
@@ -149,40 +150,98 @@ class CartRunner:
         self.emit(Event(EventKind.ALL_DONE, message="Сборка завершена"))
         return carts
 
-    def _run_rounds(self, active) -> List[CartResult]:
-        """Прогоняет вкладки по очереди в одном браузере.
+    def _run_attached(self, active) -> List[CartResult]:
+        """Распределяет вкладки по запущенным браузерам пользователя.
 
-        Браузер один, поэтому параллелить нечего: вкладка за вкладкой, и между
-        кругами корзина очищается — иначе товары предыдущего круга попадут в
-        следующую ссылку.
+        Браузеров может быть несколько (каждый на своём порту и профиле) —
+        тогда они работают параллельно. Вкладки сверх их числа достаются тем же
+        браузерам вторым кругом: два браузера на пять вкладок лучше, чем отказ.
         """
-        rounds = len(active)
-        if rounds > 1 and not self.cfg.clear_cart_after:
+        addresses = probe_debug_ports(self.cfg, len(active))
+        if not addresses:
+            self.emit(
+                Event(
+                    EventKind.THREAD_FAILED,
+                    message=(
+                        f"Ни один браузер не отвечает по адресу "
+                        f"{self.cfg.debug_address}. Запустите «Chrome с "
+                        "отладкой.bat»."
+                    ),
+                )
+            )
+            self.emit(Event(EventKind.ALL_DONE, message="Сборка не начата"))
+            return []
+
+        groups: List[List] = [[] for _ in addresses]
+        for index, item in enumerate(active):
+            groups[index % len(addresses)].append(item)
+
+        self.emit(
+            Event(
+                EventKind.LOG,
+                message=(
+                    f"Нашёл браузеров: {len(addresses)}, вкладок: {len(active)}. "
+                    + (
+                        "Каждой вкладке свой браузер."
+                        if len(addresses) >= len(active)
+                        else "Лишние вкладки пойдут вторым кругом."
+                    )
+                ),
+            )
+        )
+
+        if len(active) > len(addresses) and not self.cfg.clear_cart_after:
             self.emit(
                 Event(
                     EventKind.LOG,
                     message=(
-                        "ВНИМАНИЕ: кругов несколько, а очистка корзины "
+                        "ВНИМАНИЕ: кругов будет несколько, а очистка корзины "
                         "выключена — каждая следующая ссылка будет включать "
                         "товары предыдущих кругов."
                     ),
                 )
             )
 
+        carts: List[CartResult] = []
+        with ThreadPoolExecutor(max_workers=len(addresses)) as pool:
+            futures = [
+                pool.submit(self._run_rounds, address, group)
+                for address, group in zip(addresses, groups)
+                if group
+            ]
+            for future in futures:
+                try:
+                    carts.extend(future.result())
+                except Exception as exc:  # noqa: BLE001
+                    log.exception("Браузер упал")
+                    self.emit(Event(EventKind.THREAD_FAILED, message=str(exc)))
+
+        carts.sort(key=lambda cart: cart.thread_id)
+        self.emit(Event(EventKind.ALL_DONE, message="Сборка завершена"))
+        return carts
+
+    def _run_rounds(self, address: str, active) -> List[CartResult]:
+        """Прогоняет доставшиеся браузеру вкладки по очереди.
+
+        В одном браузере корзина одна, поэтому вкладки идут кругами, и между
+        кругами корзина очищается — иначе товары предыдущего круга попадут в
+        следующую ссылку.
+        """
+        rounds = len(active)
+        tabs = ", ".join(str(thread_id) for thread_id, _ in active)
         self.emit(
             Event(
                 EventKind.LOG,
-                message=(
-                    f"Работаю в вашем браузере: {rounds} круг(ов) по очереди, "
-                    "каждый со своей ссылкой."
-                ),
+                message=f"Браузер {address}: вкладки {tabs}",
             )
         )
 
         carts: List[CartResult] = []
         driver = None
         try:
-            driver = create_driver(self.cfg, self.cfg.profile_for(1))
+            driver = create_driver(
+                self.cfg, self.cfg.profile_for(1), debug_address=address
+            )
 
             # Разогрев нужен один раз на браузер, а не на каждый круг.
             if self.cfg.warm_up and not warm_up(driver, self.cfg):
@@ -191,20 +250,22 @@ class CartRunner:
             for number, (thread_id, skus) in enumerate(active, start=1):
                 if self._cancel.is_set():
                     break
-                self.emit(
-                    Event(
-                        EventKind.LOG,
-                        message=f"— Круг {number} из {rounds} —",
+                if rounds > 1:
+                    self.emit(
+                        Event(
+                            EventKind.LOG,
+                            message=(
+                                f"— Браузер {address}: круг {number} из {rounds} —"
+                            ),
+                        )
                     )
-                )
                 carts.append(self._collect(driver, thread_id, skus))
         except Exception as exc:  # noqa: BLE001
-            log.exception("Сборка в браузере пользователя упала")
-            self.emit(Event(EventKind.THREAD_FAILED, message=str(exc)))
+            log.exception("Сборка в браузере %s упала", address)
+            self.emit(Event(EventKind.THREAD_FAILED, message=f"{address}: {exc}"))
         finally:
             quit_driver(driver, owned=False)
 
-        self.emit(Event(EventKind.ALL_DONE, message="Сборка завершена"))
         return carts
 
     def _verify(self, driver, thread_id: int, skus: List[str], cart) -> None:
