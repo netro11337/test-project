@@ -1,0 +1,134 @@
+========================================================
+OZON AUTO REGISTRATION SYSTEM - SETUP GUIDE
+========================================================
+
+QUICK START (Windows):
+================
+
+Step 1: Install Python 3.8+
+   - Download from: https://python.org
+   - IMPORTANT: Check "Add Python to PATH" during installation
+   - Restart your computer after installation
+
+Step 2: Extract this archive
+   - Right-click the ZIP file
+   - Choose "Extract All"
+   - Pick a folder (e.g., C:\ozon-registration)
+
+Step 3: Run the installer
+   - Open the extracted folder
+   - Double-click: install_and_run.bat
+   - Wait for installation to complete (5-10 minutes)
+   - Application will start automatically
+
+That's it!
+
+
+SETUP (Linux/macOS):
+================
+
+1. Make script executable:
+   chmod +x install_and_run.sh
+
+2. Run it:
+   bash install_and_run.sh
+
+   OR use Python launcher:
+   python3 start.py
+
+
+MANUAL SETUP (if automatic doesn't work):
+================
+
+Open Command Prompt in the folder and run:
+
+   pip install -r requirements.txt
+   python -m playwright install chromium
+   python ozon_ui_panel.py
+
+
+TROUBLESHOOTING:
+================
+
+ERROR: "Python not found"
+   - Install Python 3.8+ from https://python.org
+   - Restart computer after installation
+
+ERROR: In Python interpreter (>>>)
+   - You accidentally opened Python shell
+   - Type: exit()
+   - Then try again
+
+Dependencies not installing
+   - Run: pip install --upgrade pip
+   - Then: pip install -r requirements.txt
+
+Chromium not installing
+   - Run: python -m playwright install chromium --with-deps
+
+Application won't start
+   - Try: python ozon_ui_panel.py
+
+Need help?
+   - Check LAUNCH.md file
+   - Check README.md for full documentation
+
+
+FILES IN THIS ARCHIVE:
+================
+
+LAUNCH FILES (use these):
+   - install_and_run.bat (Windows - RECOMMENDED)
+   - install_and_run.sh (Linux/macOS)
+   - start.py (works on all systems)
+   - run.cmd (alternative for Windows)
+
+APPLICATION FILES:
+   - ozon_ui_panel.py (main GUI application)
+   - ozon_browser_automation.py (browser control)
+   - megasms_service.py (MegaSMS integration)
+
+DOCUMENTATION:
+   - LAUNCH.md (launch instructions)
+   - QUICK_START.md (quick start guide)
+   - README.md (full documentation)
+   - BROWSER_AUTOMATION_GUIDE.md (detailed guide)
+
+CONFIGURATION:
+   - requirements.txt (Python dependencies)
+   - config.yaml (configuration)
+   - .env.example (environment template)
+
+
+FIRST USE:
+================
+
+1. Application opens
+2. Click "Check MegaSMS Balance"
+3. Prepare email list (format: email@domain.com:password)
+4. Load emails or paste them
+5. Enter number of accounts
+6. Click "Start"
+7. Watch logs and results
+8. Save or copy results
+
+
+SYSTEM REQUIREMENTS:
+================
+
+- Python 3.8, 3.9, 3.10, 3.11, or 3.12
+- Windows 7+, macOS 10.12+, or Linux
+- 512 MB RAM minimum
+- 1 GB free disk space (for Chromium)
+- Internet connection
+
+
+CONTACT:
+================
+
+For issues, check the included documentation files.
+
+========================================================
+Version: 2.0
+Status: Ready to use
+========================================================
