@@ -9,9 +9,16 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, List, Optional, Sequence
 
+from selenium.common.exceptions import WebDriverException
+
 from .cart import ShareResult, read_cart_summary
 from .config import Settings, ensure_app_dir
-from .driver import create_driver, quit_driver
+from .driver import (
+    apply_resource_blocking,
+    clear_resource_blocking,
+    create_driver,
+    quit_driver,
+)
 from .worker import (
     Outcome,
     SkuResult,
@@ -140,6 +147,15 @@ class CartRunner:
         if self.cfg.headless or self.cfg.captcha_wait <= 0:
             return False
 
+        # Пазл в капче — картинка. С включённой экономией трафика она не
+        # загрузится, и проверка будет вечно крутить спиннер. Снимаем
+        # блокировку и перезагружаем страницу, иначе картинку уже не подтянуть.
+        clear_resource_blocking(driver)
+        try:
+            driver.refresh()
+        except WebDriverException as exc:
+            log.debug("Не перезагрузил страницу проверки: %s", exc)
+
         self.emit(
             Event(
                 EventKind.LOG,
@@ -151,9 +167,12 @@ class CartRunner:
                 ),
             )
         )
-        passed = wait_until_unblocked(
-            driver, market, self.cfg.captcha_wait, self._cancel.is_set
-        )
+        try:
+            passed = wait_until_unblocked(
+                driver, market, self.cfg.captcha_wait, self._cancel.is_set
+            )
+        finally:
+            apply_resource_blocking(driver, self.cfg)
         self.emit(
             Event(
                 EventKind.LOG,

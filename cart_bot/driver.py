@@ -46,17 +46,15 @@ def _build_options(cfg: Settings, profile_dir: Path, headless: bool) -> Options:
     opts.add_argument("--lang=ru-RU")
     opts.add_argument(f"--user-agent={_UA}")
 
-    if cfg.block_images:
-        opts.add_argument("--blink-settings=imagesEnabled=false")
-
+    # Картинки НЕ отключаем флагами запуска (--blink-settings, prefs): их
+    # нельзя вернуть на ходу, а капчу с картинкой-пазлом тогда не решить.
+    # Вся блокировка идёт через CDP — её можно снять и включить обратно.
     prefs = {
         "profile.default_content_setting_values.notifications": 2,
         "profile.default_content_setting_values.geolocation": 2,
         "credentials_enable_service": False,
         "profile.password_manager_enabled": False,
     }
-    if cfg.block_images:
-        prefs["profile.managed_default_content_settings.images"] = 2
     opts.add_experimental_option("prefs", prefs)
 
     # Убираем очевидные следы автоматизации — Ozon на них реагирует.
@@ -104,19 +102,45 @@ def create_driver(
                 "{get: () => undefined});"
             },
         )
-        if cfg.block_analytics or cfg.block_images:
-            patterns = [
-                p
-                for p in BLOCKED_URL_PATTERNS
-                if (cfg.block_images and p.startswith("*."))
-                or (cfg.block_analytics and not p.startswith("*."))
-            ]
-            driver.execute_cdp_cmd("Network.enable", {})
-            driver.execute_cdp_cmd("Network.setBlockedURLs", {"urls": patterns})
     except Exception as exc:  # noqa: BLE001 - CDP не критичен для работы
         log.debug("CDP-настройки не применились: %s", exc)
 
+    apply_resource_blocking(driver, cfg)
     return driver
+
+
+def _patterns_for(cfg: Settings) -> list:
+    return [
+        pattern
+        for pattern in BLOCKED_URL_PATTERNS
+        if (cfg.block_images and pattern.startswith("*."))
+        or (cfg.block_analytics and not pattern.startswith("*."))
+    ]
+
+
+def apply_resource_blocking(driver: webdriver.Chrome, cfg: Settings) -> None:
+    """Включает экономию трафика: картинки, шрифты, аналитика."""
+    patterns = _patterns_for(cfg)
+    if not patterns:
+        return
+    try:
+        driver.execute_cdp_cmd("Network.enable", {})
+        driver.execute_cdp_cmd("Network.setBlockedURLs", {"urls": patterns})
+    except Exception as exc:  # noqa: BLE001
+        log.debug("Не включил блокировку ресурсов: %s", exc)
+
+
+def clear_resource_blocking(driver: webdriver.Chrome) -> None:
+    """Снимает блокировку ресурсов.
+
+    Нужно на странице проверки: пазл в капче — это картинка, и с включённой
+    блокировкой виджет крутит загрузку бесконечно, а решить капчу невозможно.
+    """
+    try:
+        driver.execute_cdp_cmd("Network.enable", {})
+        driver.execute_cdp_cmd("Network.setBlockedURLs", {"urls": []})
+    except Exception as exc:  # noqa: BLE001
+        log.debug("Не снял блокировку ресурсов: %s", exc)
 
 
 def quit_driver(driver: Optional[webdriver.Chrome]) -> None:
