@@ -98,12 +98,36 @@ def open_cart(driver: WebDriver, cfg: Settings, market: Market) -> bool:
         return False
 
 
+_COUNT_RE = re.compile(r"(\d+)\s*товар", re.IGNORECASE)
+
+
+def _count_from_text(driver: WebDriver, market: Market) -> int:
+    """Читает число из подписи вида «1 товар • 400 гр»."""
+    for xpath in market.cart_count_text:
+        try:
+            elements = driver.find_elements(By.XPATH, xpath)
+        except WebDriverException:
+            continue
+        for element in elements:
+            try:
+                match = _COUNT_RE.search(element.text or "")
+            except WebDriverException:
+                continue
+            if match:
+                return int(match.group(1))
+    return -1
+
+
 def count_items(driver: WebDriver, market: Market) -> int:
     """Число позиций в корзине; -1, если посчитать не вышло.
 
     Ноль возвращаем только когда магазин прямо показал пустую корзину. Если
     вёрстка незнакомая, честнее сказать «не знаю», чем «пусто»: иначе
     несработавшее добавление не отличить от неопознанной разметки.
+
+    Порядок способов: явная пустота, разметка списка, подпись с числом. Список
+    магазин перерисовывает чаще, чем подпись «N товаров», поэтому она идёт
+    запасным вариантом, а не единственным.
     """
     try:
         if market.cart_empty and driver.find_elements(
@@ -111,9 +135,11 @@ def count_items(driver: WebDriver, market: Market) -> int:
         ):
             return 0
         items = driver.find_elements(By.CSS_SELECTOR, market.cart_item)
-        return len(items) if items else -1
+        if items:
+            return len(items)
     except WebDriverException:
         return -1
+    return _count_from_text(driver, market)
 
 
 def _grant_clipboard(driver: WebDriver, market: Market) -> bool:
@@ -432,6 +458,23 @@ def find_clear_button(
     return neighbour, f"сосед «Поделиться» {market.clear_side}"
 
 
+def _confirm_clear(driver: WebDriver, cfg: Settings, market: Market) -> bool:
+    """Жмёт «Удалить» в окне подтверждения. False — окна не было."""
+    deadline = time.monotonic() + min(3.0, cfg.element_timeout)
+    while time.monotonic() < deadline:
+        for xpath in market.cart_clear_confirm:
+            try:
+                candidates = _visible(driver.find_elements(By.XPATH, xpath))
+            except WebDriverException:
+                continue
+            for element in candidates:
+                if _click(driver, element):
+                    log.debug("Подтвердил удаление по селектору %s", xpath)
+                    return True
+        time.sleep(0.1)
+    return False
+
+
 def clear_cart(driver: WebDriver, cfg: Settings) -> Tuple[bool, str]:
     """Опустошает корзину, чтобы следующий круг начинался с чистой.
 
@@ -457,11 +500,12 @@ def clear_cart(driver: WebDriver, cfg: Settings) -> Tuple[bool, str]:
 
     time.sleep(cfg.micro_pause)
 
-    # Магазин может переспросить «точно удалить?».
-    for xpath in market.cart_clear_confirm:
-        for element in _visible(driver.find_elements(By.XPATH, xpath)):
-            if _click(driver, element):
-                break
+    # Магазин переспрашивает: окно «Удалить товары» с кнопкой «Удалить».
+    # Окно появляется не мгновенно, поэтому именно ждём его, а не заглядываем
+    # один раз: без подтверждения корзина останется полной.
+    confirmed = _confirm_clear(driver, cfg, market)
+    if confirmed:
+        how += " + подтверждение"
 
     deadline = time.monotonic() + cfg.element_timeout
     while time.monotonic() < deadline:

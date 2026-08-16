@@ -219,7 +219,22 @@ class CartRunner:
 
         if not open_cart(driver, self.cfg, self.cfg.market):
             return
+
         before = count_items(driver, self.cfg.market)
+        if before < 0:
+            # Посчитать не вышло. Незнание — не повод гонять второй круг:
+            # раньше -1 сравнивалось с числом SKU и проверка шла всегда.
+            self.emit(
+                Event(
+                    EventKind.LOG,
+                    thread_id=thread_id,
+                    message=(
+                        f"Поток {thread_id}: не смог пересчитать корзину, "
+                        "проверочный круг пропускаю"
+                    ),
+                )
+            )
+            return
         if before >= len(skus):
             # Всё на месте — гонять по карточкам второй раз незачем.
             return
