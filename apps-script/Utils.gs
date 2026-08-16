@@ -98,6 +98,10 @@ function readSourceStocks_() {
       '». Заголовки должны быть в одной из первых 10 строк.');
   }
 
+  // Название товара — необязательно, Ozon его не требует
+  var nameCol = matchColumn_(values[headerRow],
+    aliasesFor_(CONFIG.NAME_HEADER, HEADER_ALIASES.name));
+
   var map = {};
   var rows = [];
   var problems = [];
@@ -125,7 +129,13 @@ function readSourceStocks_() {
     }
 
     map[sku] = qty;
-    rows.push({ sku: sku, raw: rawSku, qty: qty, row: i + 1 });
+    rows.push({
+      sku: sku,
+      raw: rawSku,
+      qty: qty,
+      name: nameCol === -1 ? '' : String(values[i][nameCol] || '').trim(),
+      row: i + 1
+    });
   }
 
   if (!rows.length) {
@@ -202,8 +212,8 @@ function logRun_(result) {
   var sh = ss.getSheetByName(LOG_SHEET);
   if (!sh) {
     sh = ss.insertSheet(LOG_SHEET);
-    sh.appendRow(['Дата', 'Режим', 'Файл', 'Обновлено',
-      'Обнулено', 'Нет в шаблоне', 'Замечания']);
+    sh.appendRow(['Дата', 'Режим', 'Файл', 'Строк в файле',
+      'Дописано', 'Обнулено', 'Склад', 'Замечания']);
     sh.setFrozenRows(1);
   }
   sh.appendRow([
@@ -211,8 +221,9 @@ function logRun_(result) {
     result.mode,
     result.fileUrl ? '=HYPERLINK("' + result.fileUrl + '";"' + result.fileName + '")' : '',
     result.updated || 0,
+    result.added || 0,
     result.zeroed || 0,
-    result.notInTemplate || 0,
+    result.warehouse || '',
     (result.problems || []).join('\n')
   ]);
 }
@@ -232,9 +243,9 @@ function mailResult_(file, result) {
   var lines = [
     'Файл остатков для загрузки в Ozon Seller готов.',
     '',
-    'Обновлено позиций: ' + (result.updated || 0),
+    'Строк с остатками: ' + (result.updated || 0),
     'Обнулено: ' + (result.zeroed || 0),
-    'Нет в шаблоне: ' + (result.notInTemplate || 0),
+    'Склад: ' + (result.warehouse || '—'),
     '',
     'Ссылка: ' + file.getUrl()
   ];
