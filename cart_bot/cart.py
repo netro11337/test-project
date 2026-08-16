@@ -88,7 +88,9 @@ def open_cart(driver: WebDriver, cfg: Settings, market: Market) -> bool:
         return False
 
     try:
-        WebDriverWait(driver, cfg.element_timeout, poll_frequency=0.1).until(
+        # Корзина тяжелее карточки товара, поэтому ждём дольше обычного:
+        # преждевременная сдача здесь стоит потерянной ссылки на корзину.
+        WebDriverWait(driver, cfg.element_timeout * 2, poll_frequency=0.1).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, market.cart_ready))
         )
         return True
@@ -97,9 +99,19 @@ def open_cart(driver: WebDriver, cfg: Settings, market: Market) -> bool:
 
 
 def count_items(driver: WebDriver, market: Market) -> int:
-    """Число позиций в корзине; -1, если посчитать не вышло."""
+    """Число позиций в корзине; -1, если посчитать не вышло.
+
+    Ноль возвращаем только когда магазин прямо показал пустую корзину. Если
+    вёрстка незнакомая, честнее сказать «не знаю», чем «пусто»: иначе
+    несработавшее добавление не отличить от неопознанной разметки.
+    """
     try:
-        return len(driver.find_elements(By.CSS_SELECTOR, market.cart_item))
+        if market.cart_empty and driver.find_elements(
+            By.CSS_SELECTOR, market.cart_empty
+        ):
+            return 0
+        items = driver.find_elements(By.CSS_SELECTOR, market.cart_item)
+        return len(items) if items else -1
     except WebDriverException:
         return -1
 

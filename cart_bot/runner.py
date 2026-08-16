@@ -300,6 +300,33 @@ class CartRunner:
             if not self._cancel.is_set():
                 share, cart.items_in_cart = read_cart_summary(driver, self.cfg)
                 cart.apply_share(share)
+
+                if cart.added > 0 and cart.items_in_cart == 0:
+                    # Отчитались об успехе, а корзина пуста: значит клики не
+                    # дошли. Молчать об этом нельзя — человек будет уверен,
+                    # что корзина собрана.
+                    cart.error = (
+                        f"добавлено по отчёту {cart.added}, но корзина пуста — "
+                        "клики не сработали"
+                    )
+                    self.emit(
+                        Event(
+                            EventKind.LOG,
+                            thread_id=thread_id,
+                            message=f"Поток {thread_id}: ВНИМАНИЕ, {cart.error}",
+                        )
+                    )
+                elif cart.items_in_cart > 0:
+                    self.emit(
+                        Event(
+                            EventKind.LOG,
+                            thread_id=thread_id,
+                            message=(
+                                f"Поток {thread_id}: в корзине "
+                                f"{cart.items_in_cart} позиц(ий) — проверено"
+                            ),
+                        )
+                    )
                 if share.message:
                     # На успехе здесь лежит сработавший селектор кнопки — он
                     # нужен, когда вёрстка магазина поедет и надо будет понять,

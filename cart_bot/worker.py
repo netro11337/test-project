@@ -128,35 +128,45 @@ def find_add_button(
         time.sleep(0.15)
 
 
+# Надпись после добавления: «В корзине», «1 товар», «Перейти в корзину».
+_ADDED_WORDS = ("корзине", "товар", "перейти")
+
+
+def _looks_added(text: str) -> bool:
+    low = text.lower()
+    return any(word in low for word in _ADDED_WORDS)
+
+
 def _confirm_added(
     driver: WebDriver,
     cfg: Settings,
     market: Market,
     button: WebElement,
     before: str,
-) -> bool:
-    """Ждёт подтверждения, что товар оказался в корзине.
+) -> Optional[str]:
+    """Ждёт доказательства, что товар оказался в корзине.
 
-    Считаем успехом любой из признаков: появился маркер «в корзине» либо сама
-    кнопка изменилась — исчезла, отвалилась из DOM или сменила надпись.
-    Опираться только на один текст рискованно: магазин их меняет, и тогда
-    добавленный товар засчитывался бы как ошибка.
+    Возвращает признак, по которому это установлено, либо None.
+
+    Доказательством считается только маркер «в корзине» или осмысленная смена
+    надписи на кнопке. Пропажа кнопки и любые ошибки браузера успехом НЕ
+    считаются: страница перерисовывается и без добавления, а завышенный отчёт
+    хуже честной ошибки — человек уверен, что корзина собрана, а она пуста.
     """
     deadline = time.monotonic() + cfg.element_timeout
     while time.monotonic() < deadline:
         if _find_first(driver, market.in_cart_marker) is not None:
-            return True
+            return "маркер «в корзине»"
         try:
-            if not button.is_displayed():
-                return True
-            if (button.text or "").strip() != before:
-                return True
-        except StaleElementReferenceException:
-            return True
-        except WebDriverException:
-            return True
+            text = (button.text or "").strip()
+            if text and text != before and _looks_added(text):
+                return f"надпись стала «{text}»"
+        except (StaleElementReferenceException, WebDriverException):
+            # Кнопку перерисовали — это само по себе ничего не доказывает,
+            # ждём маркер дальше.
+            pass
         time.sleep(0.1)
-    return False
+    return None
 
 
 def add_sku(driver: WebDriver, sku: str, cfg: Settings) -> SkuResult:
@@ -220,9 +230,10 @@ def add_sku(driver: WebDriver, sku: str, cfg: Settings) -> SkuResult:
     except (NoSuchElementException, WebDriverException) as exc:
         return SkuResult(sku, Outcome.ERROR, str(exc).splitlines()[0], _since(started))
 
-    if _confirm_added(driver, cfg, market, button, before):
+    evidence = _confirm_added(driver, cfg, market, button, before)
+    if evidence is not None:
         time.sleep(cfg.micro_pause)
-        return SkuResult(sku, Outcome.ADDED, f"Добавлен ({selector})", _since(started))
+        return SkuResult(sku, Outcome.ADDED, f"Добавлен: {evidence}", _since(started))
 
     if _find_first(driver, market.out_of_stock) is not None:
         return SkuResult(sku, Outcome.OUT_OF_STOCK, "Нет в наличии", _since(started))

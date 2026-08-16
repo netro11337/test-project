@@ -40,6 +40,11 @@ class Market:
     # Сравнение идёт в нижнем регистре по вхождению.
     antibot_titles: Tuple[str, ...] = ("antibot", "captcha", "доступ ограничен")
 
+    # CSS пустой корзины. Нужен, чтобы отличать «корзина пуста» от «не смог
+    # посчитать»: без этого несработавшее добавление выглядело бы так же, как
+    # неопознанная вёрстка, и проверка результата теряла бы смысл.
+    cart_empty: str = ""
+
 
 OZON = Market(
     key="ozon",
@@ -79,8 +84,12 @@ OZON = Market(
         " or contains(text(), 'Ой, что-то пошло не так')"
         " or contains(text(), 'Обновите страницу')]"
     ),
-    cart_ready="div[data-widget='split'], div[data-widget='cartEmpty']",
-    cart_item="div[data-widget='cartItem']",
+    cart_ready=(
+        "div[data-widget='split'], div[data-widget='cartEmpty'], "
+        "div[data-widget='cartList'], [data-widget*='cart']"
+    ),
+    cart_item="div[data-widget='cartItem'], div[data-widget='cartItemsList'] li",
+    cart_empty="div[data-widget='cartEmpty']",
     # На Ozon кнопка подписана текстом — ищем по нему.
     share_buttons=(
         "//div[@data-widget='cartShare']//button",
@@ -155,6 +164,7 @@ WB = Market(
         "//input[@type='checkbox']",
         "//label[contains(., 'Все')]//input[@type='checkbox']",
     ),
+    cart_empty="div.basket-empty, div.basket__empty",
 )
 
 
