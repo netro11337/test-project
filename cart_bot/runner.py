@@ -10,7 +10,7 @@ from enum import Enum
 from typing import Callable, List, Optional, Sequence
 
 from .cart import ShareResult, read_cart_summary
-from .config import CART_URL, Settings, ensure_app_dir
+from .config import Settings, ensure_app_dir
 from .driver import create_driver, quit_driver
 from .worker import Outcome, SkuResult, add_sku_with_retry
 
@@ -40,7 +40,7 @@ class CartResult:
     """Итог одного потока — его собственная корзина."""
 
     thread_id: int
-    url: str = CART_URL
+    url: str = ""
     share_method: str = "fallback"
     share_note: str = ""
     profile: str = ""
@@ -129,7 +129,12 @@ class CartRunner:
 
         started = time.monotonic()
         profile = self.cfg.profile_for(thread_id)
-        cart = CartResult(thread_id=thread_id, total=len(skus), profile=str(profile))
+        cart = CartResult(
+            thread_id=thread_id,
+            total=len(skus),
+            profile=str(profile),
+            url=self.cfg.market.cart_url,
+        )
 
         self.emit(
             Event(
@@ -160,21 +165,26 @@ class CartRunner:
                 if result.outcome is Outcome.BLOCKED:
                     # Антибот бьёт по всей сессии: дальше в этом потоке
                     # добавлять бессмысленно, только копить ошибки.
-                    cart.error = "Ozon заблокировал сессию потока"
+                    cart.error = f"{self.cfg.market.title} заблокировал сессию потока"
                     break
 
             if not self._cancel.is_set():
                 share, cart.items_in_cart = read_cart_summary(driver, self.cfg)
                 cart.apply_share(share)
-                if not share.is_shared and share.message:
+                if share.message:
+                    # На успехе здесь лежит сработавший селектор кнопки — он
+                    # нужен, когда вёрстка магазина поедет и надо будет понять,
+                    # какой из вариантов ещё живой.
+                    prefix = (
+                        "ссылка получена"
+                        if share.is_shared
+                        else "ссылку «Поделиться» получить не удалось"
+                    )
                     self.emit(
                         Event(
                             EventKind.LOG,
                             thread_id=thread_id,
-                            message=(
-                                f"Поток {thread_id}: ссылку «Поделиться» получить "
-                                f"не удалось ({share.message}), отдаю обычный /cart"
-                            ),
+                            message=f"Поток {thread_id}: {prefix} ({share.message})",
                         )
                     )
         except Exception as exc:  # noqa: BLE001
@@ -196,5 +206,5 @@ def open_cart_in_browser(cfg: Settings, thread_id: int):
     Chrome не даёт двум процессам держать один user-data-dir.
     """
     driver = create_driver(cfg, cfg.profile_for(thread_id), headless=False)
-    driver.get(CART_URL)
+    driver.get(cfg.market.cart_url)
     return driver

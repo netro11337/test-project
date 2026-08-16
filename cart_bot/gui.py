@@ -10,6 +10,7 @@ from tkinter.scrolledtext import ScrolledText
 from typing import Dict, List
 
 from .config import Settings, ensure_app_dir
+from .markets import DEFAULT_MARKET, MARKETS
 from .runner import CartResult, CartRunner, Event, EventKind, open_cart_in_browser
 from .skus import MAX_SKU, MIN_SKU, dedupe_batches, parse_skus, split_evenly
 
@@ -17,10 +18,10 @@ MAX_THREADS = 20
 POLL_MS = 80
 
 
-class OzonCartApp(ttk.Frame):
+class CartBotApp(ttk.Frame):
     def __init__(self, master: tk.Tk):
         super().__init__(master, padding=10)
-        self.master.title("Ozon — параллельная сборка корзин")
+        self.master.title("Ozon / Wildberries — параллельная сборка корзин")
         self.master.geometry("1180x780")
         self.master.minsize(980, 660)
         self.grid(row=0, column=0, sticky="nsew")
@@ -39,6 +40,7 @@ class OzonCartApp(ttk.Frame):
         self._build_body()
         self._build_footer()
         self._rebuild_tabs()
+        self._on_market_change()
         self.after(POLL_MS, self._pump_events)
 
     # ------------------------------------------------------------------ UI
@@ -50,6 +52,7 @@ class OzonCartApp(ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
 
+        self.market_var = tk.StringVar(value=DEFAULT_MARKET)
         self.threads_var = tk.IntVar(value=4)
         self.workers_var = tk.IntVar(value=4)
         self.headless_var = tk.BooleanVar(value=True)
@@ -59,7 +62,22 @@ class OzonCartApp(ttk.Frame):
         self.retries_var = tk.IntVar(value=1)
         self.share_var = tk.BooleanVar(value=True)
 
-        ttk.Label(box, text="Потоков (корзин):").grid(row=0, column=0, padx=(0, 4))
+        # Маркетплейс выбирается на весь запуск: все потоки идут в один магазин.
+        market_row = ttk.Frame(box)
+        market_row.grid(row=0, column=0, columnspan=20, sticky="w", pady=(0, 8))
+        ttk.Label(market_row, text="Маркетплейс:").pack(side="left", padx=(0, 8))
+        for market in MARKETS.values():
+            ttk.Radiobutton(
+                market_row,
+                text=market.title,
+                value=market.key,
+                variable=self.market_var,
+                command=self._on_market_change,
+            ).pack(side="left", padx=(0, 12))
+        self.market_hint = ttk.Label(market_row, foreground="#666", text="")
+        self.market_hint.pack(side="left", padx=(8, 0))
+
+        ttk.Label(box, text="Потоков (корзин):").grid(row=1, column=0, padx=(0, 4))
         threads = ttk.Spinbox(
             box,
             from_=1,
@@ -68,16 +86,16 @@ class OzonCartApp(ttk.Frame):
             textvariable=self.threads_var,
             command=self._rebuild_tabs,
         )
-        threads.grid(row=0, column=1, padx=(0, 12))
+        threads.grid(row=1, column=1, padx=(0, 12))
         threads.bind("<Return>", lambda _e: self._rebuild_tabs())
         threads.bind("<FocusOut>", lambda _e: self._rebuild_tabs())
 
-        ttk.Label(box, text="Одновременно:").grid(row=0, column=2, padx=(0, 4))
+        ttk.Label(box, text="Одновременно:").grid(row=1, column=2, padx=(0, 4))
         ttk.Spinbox(
             box, from_=1, to=MAX_THREADS, width=5, textvariable=self.workers_var
-        ).grid(row=0, column=3, padx=(0, 12))
+        ).grid(row=1, column=3, padx=(0, 12))
 
-        ttk.Label(box, text="Таймаут, с:").grid(row=0, column=4, padx=(0, 4))
+        ttk.Label(box, text="Таймаут, с:").grid(row=1, column=4, padx=(0, 4))
         ttk.Spinbox(
             box,
             from_=2.0,
@@ -85,9 +103,9 @@ class OzonCartApp(ttk.Frame):
             increment=0.5,
             width=5,
             textvariable=self.timeout_var,
-        ).grid(row=0, column=5, padx=(0, 12))
+        ).grid(row=1, column=5, padx=(0, 12))
 
-        ttk.Label(box, text="Пауза, с:").grid(row=0, column=6, padx=(0, 4))
+        ttk.Label(box, text="Пауза, с:").grid(row=1, column=6, padx=(0, 4))
         ttk.Spinbox(
             box,
             from_=0.0,
@@ -95,22 +113,37 @@ class OzonCartApp(ttk.Frame):
             increment=0.05,
             width=5,
             textvariable=self.pause_var,
-        ).grid(row=0, column=7, padx=(0, 12))
+        ).grid(row=1, column=7, padx=(0, 12))
 
-        ttk.Label(box, text="Ретраев:").grid(row=0, column=8, padx=(0, 4))
+        ttk.Label(box, text="Ретраев:").grid(row=1, column=8, padx=(0, 4))
         ttk.Spinbox(
             box, from_=0, to=3, width=4, textvariable=self.retries_var
-        ).grid(row=0, column=9, padx=(0, 12))
+        ).grid(row=1, column=9, padx=(0, 12))
 
         ttk.Checkbutton(box, text="Headless", variable=self.headless_var).grid(
-            row=0, column=10, padx=(0, 8)
+            row=1, column=10, padx=(0, 8)
         )
         ttk.Checkbutton(box, text="Без картинок", variable=self.images_var).grid(
-            row=0, column=11, padx=(0, 8)
+            row=1, column=11, padx=(0, 8)
         )
         ttk.Checkbutton(
             box, text="Ссылка «Поделиться»", variable=self.share_var
-        ).grid(row=0, column=12)
+        ).grid(row=1, column=12)
+
+    def _on_market_change(self) -> None:
+        """Смена маркетплейса: подсказка по формату ссылок и сброс результатов.
+
+        Старые корзины относятся к другому магазину и к другим профилям, так
+        что оставлять их в таблице — значит предлагать скопировать ссылку не
+        из того магазина.
+        """
+        market = MARKETS[self.market_var.get()]
+        self.market_hint.config(text=f"ссылки вида {market.product_url.format(sku='…')}")
+        if self.carts:
+            self.carts.clear()
+            for row in self.tree.get_children():
+                self.tree.delete(row)
+        self._append_log(f"Маркетплейс: {market.title}. Профили и корзины у него свои.")
 
     def _build_body(self) -> None:
         pane = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
@@ -182,7 +215,7 @@ class OzonCartApp(ttk.Frame):
             text=(
                 "Ссылка берётся кнопкой «Поделиться корзиной» на самой странице "
                 "корзины — её можно отправлять кому угодно. Если получить её не "
-                "вышло, в таблице будет пометка ⚠ и обычный ozon.ru/cart: тогда "
+                "вышло, в таблице будет пометка ⚠ и обычный адрес корзины: тогда "
                 "смотрите корзину через «Открыть корзину»."
             ),
             wraplength=520,
@@ -277,6 +310,7 @@ class OzonCartApp(ttk.Frame):
 
     def _read_settings(self) -> Settings:
         cfg = Settings()
+        cfg.market_key = self.market_var.get()
         cfg.headless = bool(self.headless_var.get())
         cfg.block_images = bool(self.images_var.get())
         cfg.page_load_timeout = float(self.timeout_var.get())
@@ -496,5 +530,5 @@ def main() -> None:
         ttk.Style().theme_use("clam")
     except tk.TclError:
         pass
-    OzonCartApp(root)
+    CartBotApp(root)
     root.mainloop()

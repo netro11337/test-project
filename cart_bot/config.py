@@ -6,11 +6,9 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-BASE_URL = "https://www.ozon.ru"
-PRODUCT_URL = BASE_URL + "/product/{sku}/"
-CART_URL = BASE_URL + "/cart"
+from .markets import DEFAULT_MARKET, Market, get_market
 
-APP_DIR = Path(os.environ.get("OZON_CART_HOME", Path.home() / ".ozon_cart"))
+APP_DIR = Path(os.environ.get("CART_BOT_HOME", Path.home() / ".cart_bot"))
 PROFILES_DIR = APP_DIR / "profiles"
 
 # Ресурсы, которые не нужны для клика «В корзину», — режем на уровне CDP.
@@ -39,6 +37,8 @@ BLOCKED_URL_PATTERNS = (
 class Settings:
     """Параметры запуска. Значения по умолчанию подобраны под скорость."""
 
+    market_key: str = DEFAULT_MARKET
+
     headless: bool = True
     block_images: bool = True
     block_analytics: bool = True
@@ -47,7 +47,7 @@ class Settings:
     page_load_timeout: float = 5.0
     element_timeout: float = 5.0
 
-    # Единственная критическая пауза: даём фронту Ozon дорисовать состояние
+    # Единственная критическая пауза: даём фронту дорисовать состояние
     # кнопки после клика, прежде чем уходить на следующий товар.
     micro_pause: float = 0.35
 
@@ -57,18 +57,19 @@ class Settings:
     # После сборки жать «Поделиться корзиной» и забирать выданную ссылку.
     fetch_share_link: bool = True
 
-    # Профили Chrome: по одному на поток. Каждый профиль — отдельная сессия,
-    # то есть отдельная корзина Ozon, которая переживает закрытие браузера.
+    # Профили Chrome: по одному на поток и на маркетплейс. Каждый профиль —
+    # отдельная сессия, то есть отдельная корзина, которая переживает
+    # закрытие браузера.
     profiles_dir: Path = field(default=PROFILES_DIR)
-    keep_profiles: bool = True
+
+    @property
+    def market(self) -> Market:
+        return get_market(self.market_key)
 
     def profile_for(self, thread_id: int) -> Path:
-        return self.profiles_dir / f"thread-{thread_id}"
-
-    def worker_timeout(self, sku_count: int) -> float:
-        """Грубая верхняя граница на батч, чтобы поток не висел вечно."""
-        per_sku = self.page_load_timeout + self.element_timeout + self.micro_pause
-        return max(60.0, per_sku * (self.retries + 1) * sku_count + 30.0)
+        """Профиль потока. Разведён по маркетплейсам, чтобы корзины Ozon и
+        Wildberries не делили одну сессию Chrome."""
+        return self.profiles_dir / self.market_key / f"thread-{thread_id}"
 
 
 def ensure_app_dir() -> Path:

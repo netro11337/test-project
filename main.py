@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from ozon_cart.gui import main
+from cart_bot.gui import main
 
 if __name__ == "__main__":
     logging.basicConfig(

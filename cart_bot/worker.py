@@ -20,7 +20,8 @@ from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from .config import PRODUCT_URL, Settings
+from .config import Settings
+from .markets import Market
 
 log = logging.getLogger(__name__)
 
@@ -46,33 +47,6 @@ class SkuResult:
         return self.outcome in (Outcome.ADDED, Outcome.ALREADY)
 
 
-# Виджет карточки товара. data-widget стабильнее классов, которые Ozon
-# перегенерирует при каждой сборке фронта.
-_ADD_WIDGET = "div[data-widget='webAddToCart']"
-_ADD_BUTTON = (
-    "//div[@data-widget='webAddToCart']"
-    "//button[contains(., 'корзин') or contains(., 'Купить')]"
-)
-_IN_CART_MARKER = (
-    "//div[@data-widget='webAddToCart']"
-    "//*[contains(., 'В корзине') or contains(., 'Перейти в корзину')]"
-)
-_OUT_OF_STOCK = (
-    "//*[contains(text(), 'Этот товар закончил') "
-    "or contains(text(), 'Товар закончился') "
-    "or contains(text(), 'Нет в наличии')]"
-)
-_NOT_FOUND = (
-    "//*[contains(text(), 'Страница не найдена') "
-    "or contains(text(), 'такой страницы не существует')]"
-)
-_ANTIBOT = (
-    "//*[contains(text(), 'Доступ ограничен') "
-    "or contains(text(), 'Подтвердите, что вы не робот') "
-    "or contains(text(), 'Вы не робот')]"
-)
-
-
 def _find_first(driver: WebDriver, xpath: str) -> Optional[WebElement]:
     """Мгновенная проверка наличия элемента, без ожидания."""
     try:
@@ -90,7 +64,7 @@ def _click(driver: WebDriver, element: WebElement) -> None:
         driver.execute_script("arguments[0].click();", element)
 
 
-def _confirm_added(driver: WebDriver, cfg: Settings) -> bool:
+def _confirm_added(driver: WebDriver, cfg: Settings, market: Market) -> bool:
     """Ждёт, пока кнопка не переключится в состояние «в корзине».
 
     Ждём именно смену состояния, а не фиксированный sleep: на быстрой
@@ -98,7 +72,7 @@ def _confirm_added(driver: WebDriver, cfg: Settings) -> bool:
     """
     try:
         WebDriverWait(driver, cfg.element_timeout, poll_frequency=0.1).until(
-            EC.presence_of_element_located((By.XPATH, _IN_CART_MARKER))
+            EC.presence_of_element_located((By.XPATH, market.in_cart_marker))
         )
         return True
     except TimeoutException:
@@ -112,7 +86,8 @@ def add_sku(driver: WebDriver, sku: str, cfg: Settings) -> SkuResult:
     сессия и корзина живут в драйвере.
     """
     started = time.monotonic()
-    url = PRODUCT_URL.format(sku=sku)
+    market = cfg.market
+    url = market.product_url.format(sku=sku)
 
     try:
         driver.get(url)
@@ -123,19 +98,22 @@ def add_sku(driver: WebDriver, sku: str, cfg: Settings) -> SkuResult:
     except WebDriverException as exc:
         return SkuResult(sku, Outcome.ERROR, str(exc).splitlines()[0], _since(started))
 
-    if _find_first(driver, _ANTIBOT) is not None:
+    if _find_first(driver, market.antibot) is not None:
         return SkuResult(
-            sku, Outcome.BLOCKED, "Ozon показал антибот-проверку", _since(started)
+            sku,
+            Outcome.BLOCKED,
+            f"{market.title} показал антибот-проверку",
+            _since(started),
         )
-    if _find_first(driver, _NOT_FOUND) is not None:
+    if _find_first(driver, market.not_found) is not None:
         return SkuResult(sku, Outcome.NOT_FOUND, "Товар не найден", _since(started))
 
     try:
         WebDriverWait(driver, cfg.element_timeout, poll_frequency=0.1).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, _ADD_WIDGET))
+            EC.presence_of_element_located((By.CSS_SELECTOR, market.add_widget))
         )
     except TimeoutException:
-        if _find_first(driver, _OUT_OF_STOCK) is not None:
+        if _find_first(driver, market.out_of_stock) is not None:
             return SkuResult(
                 sku, Outcome.OUT_OF_STOCK, "Нет в наличии", _since(started)
             )
@@ -143,12 +121,12 @@ def add_sku(driver: WebDriver, sku: str, cfg: Settings) -> SkuResult:
             sku, Outcome.ERROR, "Кнопка добавления не появилась", _since(started)
         )
 
-    if _find_first(driver, _IN_CART_MARKER) is not None:
+    if _find_first(driver, market.in_cart_marker) is not None:
         return SkuResult(sku, Outcome.ALREADY, "Уже в корзине", _since(started))
 
-    button = _find_first(driver, _ADD_BUTTON)
+    button = _find_first(driver, market.add_button)
     if button is None:
-        if _find_first(driver, _OUT_OF_STOCK) is not None:
+        if _find_first(driver, market.out_of_stock) is not None:
             return SkuResult(
                 sku, Outcome.OUT_OF_STOCK, "Нет в наличии", _since(started)
             )
@@ -161,11 +139,11 @@ def add_sku(driver: WebDriver, sku: str, cfg: Settings) -> SkuResult:
     except (NoSuchElementException, WebDriverException) as exc:
         return SkuResult(sku, Outcome.ERROR, str(exc).splitlines()[0], _since(started))
 
-    if _confirm_added(driver, cfg):
+    if _confirm_added(driver, cfg, market):
         time.sleep(cfg.micro_pause)
         return SkuResult(sku, Outcome.ADDED, "Добавлен", _since(started))
 
-    if _find_first(driver, _OUT_OF_STOCK) is not None:
+    if _find_first(driver, market.out_of_stock) is not None:
         return SkuResult(sku, Outcome.OUT_OF_STOCK, "Нет в наличии", _since(started))
 
     return SkuResult(

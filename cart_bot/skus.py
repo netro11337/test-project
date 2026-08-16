@@ -5,10 +5,14 @@ from __future__ import annotations
 import re
 from typing import Iterable, List
 
-# SKU Ozon — числовой идентификатор. Из ссылки вида
-# https://www.ozon.ru/product/nazvanie-tovara-1234567890/ берём последнее число.
+# SKU — числовой идентификатор товара. Из ссылок достаём его по формату
+# конкретного магазина:
+#   Ozon — https://www.ozon.ru/product/nazvanie-tovara-1234567890/
+#   WB   — https://www.wildberries.ru/catalog/1234567890/detail.aspx
 _SEPARATORS = re.compile(r"[,;\s]+")
-_URL_SKU = re.compile(r"/product/(?:[^/?#]*?-)?(\d{6,})", re.IGNORECASE)
+_URL_SKU = re.compile(
+    r"/product/(?:[^/?#]*?-)?(\d{6,})|/catalog/(\d{6,})", re.IGNORECASE
+)
 _DIGITS = re.compile(r"\d{6,}")
 
 MIN_SKU = 10
@@ -28,7 +32,8 @@ def parse_skus(text: str) -> List[str]:
             continue
         match = _URL_SKU.search(token)
         if match:
-            sku = match.group(1)
+            # Сработала одна из двух групп — Ozon или WB.
+            sku = match.group(1) or match.group(2)
         else:
             digits = _DIGITS.findall(token)
             if not digits:

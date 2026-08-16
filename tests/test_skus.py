@@ -1,6 +1,6 @@
 import unittest
 
-from ozon_cart.skus import dedupe_batches, parse_skus, split_evenly
+from cart_bot.skus import dedupe_batches, parse_skus, split_evenly
 
 
 class ParseSkusTest(unittest.TestCase):
@@ -17,6 +17,24 @@ class ParseSkusTest(unittest.TestCase):
     def test_url_with_digits_in_slug(self):
         text = "https://www.ozon.ru/product/naushniki-air-3-pro-2024-987654321/"
         self.assertEqual(parse_skus(text), ["987654321"])
+
+    def test_extracts_from_wildberries_url(self):
+        text = "https://www.wildberries.ru/catalog/123456789/detail.aspx"
+        self.assertEqual(parse_skus(text), ["123456789"])
+
+    def test_wildberries_url_with_query(self):
+        text = "https://www.wildberries.ru/catalog/987654321/detail.aspx?targetUrl=SG"
+        self.assertEqual(parse_skus(text), ["987654321"])
+
+    def test_mixed_marketplaces_in_one_list(self):
+        text = (
+            "https://www.ozon.ru/product/tovar-111111111/\n"
+            "https://www.wildberries.ru/catalog/222222222/detail.aspx\n"
+            "333333333"
+        )
+        self.assertEqual(
+            parse_skus(text), ["111111111", "222222222", "333333333"]
+        )
 
     def test_dedupes_preserving_order(self):
         self.assertEqual(
