@@ -45,6 +45,33 @@ class Market:
     # неопознанная вёрстка, и проверка результата теряла бы смысл.
     cart_empty: str = ""
 
+    # Кнопка подтверждения внутри окна «Поделиться». На Ozon шага два: иконка
+    # открывает окно со списком товаров, и только вторая кнопка создаёт ссылку.
+    # Тост после успешного копирования: ссылка ушла в буфер обмена.
+    share_toast: str = (
+        "//*[contains(text(), 'Ссылка скопирована')"
+        " or contains(text(), 'скопирована')]"
+    )
+
+    share_confirm: Tuple[str, ...] = (
+        "//div[@role='dialog']//button[contains(., 'оделиться')]",
+        "//button[contains(., 'оделиться') and contains(., 'товар')]",
+        "//div[contains(@data-widget, 'modal')]//button[contains(., 'оделиться')]",
+    )
+
+    # Очистка корзины перед новым кругом: кнопка удаления рядом с «Выбрать
+    # все» и подтверждение, если магазин переспрашивает.
+    cart_clear_buttons: Tuple[str, ...] = (
+        "//button[contains(@aria-label, 'далить')]",
+        "//button[contains(@title, 'далить')]",
+        "//button[contains(., 'Удалить выбранные')]",
+        "//button[contains(., 'Удалить')]",
+    )
+    cart_clear_confirm: Tuple[str, ...] = (
+        "//div[@role='dialog']//button[contains(., 'Удалить')]",
+        "//button[contains(., 'Да, удалить')]",
+    )
+
 
 OZON = Market(
     key="ozon",
@@ -90,6 +117,10 @@ OZON = Market(
     ),
     cart_item="div[data-widget='cartItem'], div[data-widget='cartItemsList'] li",
     cart_empty="div[data-widget='cartEmpty']",
+    select_all=(
+        "//label[contains(., 'Выбрать все')]//input[@type='checkbox']",
+        "//*[contains(text(), 'Выбрать все')]/preceding::input[@type='checkbox'][1]",
+    ),
     # На Ozon кнопка подписана текстом — ищем по нему.
     share_buttons=(
         "//div[@data-widget='cartShare']//button",

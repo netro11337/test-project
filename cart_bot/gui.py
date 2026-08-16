@@ -80,6 +80,7 @@ class CartBotApp(ttk.Frame):
         self.attach_var = tk.BooleanVar(value=False)
         self.address_var = tk.StringVar(value="127.0.0.1:9222")
         self.pace_var = tk.BooleanVar(value=False)
+        self.clear_var = tk.BooleanVar(value=True)
 
         # Маркетплейс выбирается на весь запуск: все потоки идут в один магазин.
         market_row = ttk.Frame(box)
@@ -192,6 +193,11 @@ class CartBotApp(ttk.Frame):
         ).pack(side="left", padx=(0, 16))
         ttk.Checkbutton(
             attach_row, text="Человеческий темп (1.5–4 с)", variable=self.pace_var
+        ).pack(side="left", padx=(0, 16))
+        ttk.Checkbutton(
+            attach_row,
+            text="Очищать корзину после ссылки",
+            variable=self.clear_var,
         ).pack(side="left")
 
     def _on_attach_change(self) -> None:
@@ -413,6 +419,7 @@ class CartBotApp(ttk.Frame):
         cfg.attach_to_chrome = bool(self.attach_var.get())
         cfg.debug_address = self.address_var.get().strip() or "127.0.0.1:9222"
         cfg.human_pace = bool(self.pace_var.get())
+        cfg.clear_cart_after = bool(self.clear_var.get())
         if cfg.attach_to_chrome:
             # Браузер один — параллелить нечего.
             cfg.max_workers = 1
@@ -571,7 +578,44 @@ class CartBotApp(ttk.Frame):
             f"{result.message} ({result.elapsed}s)"
         )
 
+    def _resolve_pending_clipboard(self, cart: CartResult) -> None:
+        """Забирает ссылку из системного буфера обмена.
+
+        Магазин копирует ссылку в буфер сам, а прочитать её из браузера
+        удаётся не всегда. Здесь мы уже в главном потоке окна, и системный
+        буфер доступен напрямую.
+        """
+        if cart.share_method != "os_clipboard_pending":
+            return
+
+        host = MARKETS[self.cfg.market_key].base_url.split("://", 1)[-1]
+        host = host.removeprefix("www.")
+        try:
+            text = (self.clipboard_get() or "").strip()
+        except tk.TclError:
+            text = ""
+
+        if host in text and text.startswith("http"):
+            cart.url = text
+            cart.share_method = "os_clipboard"
+            self._append_log(
+                f"Поток {cart.thread_id}: забрал ссылку из буфера обмена."
+            )
+            return
+
+        # Ссылка есть, но не у нас: честно скажем, где её взять.
+        cart.share_method = "fallback"
+        cart.share_note = (
+            "магазин скопировал ссылку в буфер обмена — вставьте её "
+            "сочетанием Ctrl+V"
+        )
+        self._append_log(
+            f"Поток {cart.thread_id}: ссылка скопирована магазином в буфер "
+            "обмена, но прочитать её не вышло — вставьте вручную (Ctrl+V)."
+        )
+
     def _on_thread_done(self, cart: CartResult) -> None:
+        self._resolve_pending_clipboard(cart)
         self.carts[cart.thread_id] = cart
         status = "Готово" if not cart.error else f"Ошибка: {cart.error}"
         link = cart.url if cart.has_share_link else f"⚠ {cart.url}"

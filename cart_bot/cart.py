@@ -159,6 +159,28 @@ def _read_clipboard(driver: WebDriver) -> str:
         return ""
 
 
+def _find_first(driver: WebDriver, xpath: str) -> Optional[WebElement]:
+    try:
+        elements = driver.find_elements(By.XPATH, xpath)
+        return elements[0] if elements else None
+    except WebDriverException:
+        return None
+
+
+def _click(driver: WebDriver, element: WebElement) -> bool:
+    """Обычный клик, при перехвате — через JS. False, если не вышло совсем."""
+    try:
+        element.click()
+        return True
+    except WebDriverException:
+        try:
+            driver.execute_script("arguments[0].click();", element)
+            return True
+        except WebDriverException as exc:
+            log.debug("Клик не прошёл: %s", exc)
+            return False
+
+
 def _visible(elements: List[WebElement]) -> List[WebElement]:
     result = []
     for element in elements:
@@ -240,6 +262,40 @@ def _from_modal(
     return None
 
 
+def find_share_confirm(
+    driver: WebDriver, market: Market, avoid, timeout: float
+) -> Tuple[Optional[WebElement], str]:
+    """Ищет кнопку подтверждения внутри окна «Поделиться».
+
+    На Ozon шага два: иконка открывает окно со списком товаров, и только
+    вторая кнопка создаёт ссылку. Кнопку, которую уже нажали, пропускаем —
+    иначе окно просто закроется.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        for xpath in market.share_confirm:
+            try:
+                candidates = _visible(driver.find_elements(By.XPATH, xpath))
+            except WebDriverException:
+                continue
+            for element in candidates:
+                if avoid is not None and element == avoid:
+                    continue
+                return element, xpath
+        if time.monotonic() >= deadline:
+            return None, ""
+        time.sleep(0.1)
+
+
+def _focus_window(driver: WebDriver) -> None:
+    """Возвращает фокус окну: без него чтение буфера обмена отклоняется."""
+    try:
+        driver.switch_to.window(driver.current_window_handle)
+        driver.execute_script("window.focus();")
+    except WebDriverException:
+        pass
+
+
 def _from_clipboard(
     driver: WebDriver, market: Market, deadline: float
 ) -> Optional[ShareResult]:
@@ -285,32 +341,96 @@ def share_cart(driver: WebDriver, cfg: Settings) -> ShareResult:
             "ссылка может охватывать только первый"
         )
 
-    try:
-        try:
-            button.click()
-        except WebDriverException:
-            driver.execute_script("arguments[0].click();", button)
-    except WebDriverException as exc:
-        return _fallback(
-            market, f"Клик по «Поделиться» не прошёл: {exc}".splitlines()[0]
-        )
+    if not _click(driver, button):
+        return _fallback(market, "Клик по «Поделиться» не прошёл")
 
     time.sleep(cfg.micro_pause)
+
+    # Второй шаг: в открывшемся окне со списком товаров есть своя кнопка
+    # «Поделиться», и только она создаёт ссылку.
+    confirm, confirm_selector = find_share_confirm(
+        driver, market, button, min(3.0, cfg.element_timeout)
+    )
+    if confirm is not None:
+        if _click(driver, confirm):
+            note += f"; подтверждение: {confirm_selector}"
+            time.sleep(cfg.micro_pause)
+        else:
+            note += "; подтверждение нажать не удалось"
+
     deadline = time.monotonic() + cfg.element_timeout
 
     result = _from_modal(driver, market, deadline)
     if result is None:
+        _focus_window(driver)
         result = _from_clipboard(driver, market, deadline + 1.0)
 
-    if result is None:
-        return _fallback(
-            market,
-            f"Кнопка нажата ({selector}), но ссылка не появилась "
-            "ни в окне, ни в буфере обмена",
+    if result is not None:
+        result.message = note
+        return result
+
+    # Тост «Ссылка скопирована» означает, что ссылка создана и лежит в буфере
+    # обмена — просто прочитать её из браузера не вышло. Забрать её сможет
+    # само приложение, из системного буфера.
+    if _find_first(driver, market.share_toast) is not None:
+        return ShareResult(
+            market.cart_url,
+            "os_clipboard_pending",
+            f"{note}; магазин сообщил, что ссылка скопирована в буфер обмена",
         )
 
-    result.message = note
-    return result
+    return _fallback(
+        market,
+        f"Кнопка нажата ({selector}), но ссылка не появилась "
+        "ни в окне, ни в буфере обмена",
+    )
+
+
+def clear_cart(driver: WebDriver, cfg: Settings) -> Tuple[bool, str]:
+    """Опустошает корзину, чтобы следующий круг начинался с чистой.
+
+    Возвращает (получилось, пояснение). Успех подтверждаем повторным
+    подсчётом: без проверки «очистил» может оказаться такой же неправдой,
+    какой было «добавил».
+    """
+    market = cfg.market
+
+    if not open_cart(driver, cfg, market):
+        return False, "страница корзины не загрузилась"
+
+    if count_items(driver, market) == 0:
+        return True, "корзина и так пуста"
+
+    ensure_all_selected(driver, market)
+
+    clicked = False
+    for xpath in market.cart_clear_buttons:
+        for element in _visible(driver.find_elements(By.XPATH, xpath)):
+            if _click(driver, element):
+                clicked = True
+                break
+        if clicked:
+            break
+
+    if not clicked:
+        return False, "кнопка удаления не найдена"
+
+    time.sleep(cfg.micro_pause)
+
+    # Магазин может переспросить «точно удалить?».
+    for xpath in market.cart_clear_confirm:
+        for element in _visible(driver.find_elements(By.XPATH, xpath)):
+            if _click(driver, element):
+                break
+
+    deadline = time.monotonic() + cfg.element_timeout
+    while time.monotonic() < deadline:
+        if count_items(driver, market) == 0:
+            return True, "корзина очищена"
+        time.sleep(0.2)
+
+    left = count_items(driver, market)
+    return False, f"после удаления в корзине осталось позиций: {left}"
 
 
 def read_cart_summary(driver: WebDriver, cfg: Settings) -> Tuple[ShareResult, int]:

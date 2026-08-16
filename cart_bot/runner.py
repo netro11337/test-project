@@ -13,7 +13,7 @@ from typing import Callable, List, Optional, Sequence
 
 from selenium.common.exceptions import WebDriverException
 
-from .cart import ShareResult, read_cart_summary
+from .cart import ShareResult, clear_cart, read_cart_summary
 from .config import Settings, ensure_app_dir
 from .driver import (
     apply_resource_blocking,
@@ -63,6 +63,7 @@ class CartResult:
     added: int = 0
     failed: int = 0
     items_in_cart: int = -1
+    cleared: bool = False
     elapsed: float = 0.0
     error: str = ""
     results: List[SkuResult] = field(default_factory=list)
@@ -324,6 +325,24 @@ class CartRunner:
                             message=(
                                 f"Поток {thread_id}: в корзине "
                                 f"{cart.items_in_cart} позиц(ий) — проверено"
+                            ),
+                        )
+                    )
+
+                # Чистим только после того, как ссылка получена: иначе делиться
+                # будет уже нечем.
+                if self.cfg.clear_cart_after and cart.items_in_cart != 0:
+                    ok, why = clear_cart(driver, self.cfg)
+                    cart.cleared = ok
+                    self.emit(
+                        Event(
+                            EventKind.LOG,
+                            thread_id=thread_id,
+                            message=(
+                                f"Поток {thread_id}: очистка корзины — {why}"
+                                if ok
+                                else f"Поток {thread_id}: очистить корзину не "
+                                f"удалось ({why}), следующий круг начнётся не с пустой"
                             ),
                         )
                     )
