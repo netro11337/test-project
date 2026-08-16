@@ -94,6 +94,21 @@ def wait_until_unblocked(
     return not is_blocked(driver, market)
 
 
+def _scroll_into_view(driver: WebDriver, element: WebElement) -> None:
+    """Подводит кнопку в центр экрана.
+
+    По кнопке за пределами видимой области клик может не пройти, а магазин
+    к тому же дорисовывает содержимое по мере прокрутки.
+    """
+    try:
+        driver.execute_script(
+            "arguments[0].scrollIntoView({block: 'center', behavior: 'instant'});",
+            element,
+        )
+    except WebDriverException:
+        pass
+
+
 def _click(driver: WebDriver, element: WebElement) -> None:
     """Обычный клик, при перехвате — через JS."""
     try:
@@ -131,6 +146,9 @@ def find_add_button(
 # Надпись после добавления: «В корзине», «1 товар», «Перейти в корзину».
 _ADDED_WORDS = ("корзине", "товар", "перейти")
 
+# Сколько ждать подтверждения на промежуточных попытках клика.
+_RETRY_CONFIRM_TIMEOUT = 1.5
+
 
 def _looks_added(text: str) -> bool:
     low = text.lower()
@@ -143,6 +161,7 @@ def _confirm_added(
     market: Market,
     button: WebElement,
     before: str,
+    timeout: Optional[float] = None,
 ) -> Optional[str]:
     """Ждёт доказательства, что товар оказался в корзине.
 
@@ -153,7 +172,9 @@ def _confirm_added(
     считаются: страница перерисовывается и без добавления, а завышенный отчёт
     хуже честной ошибки — человек уверен, что корзина собрана, а она пуста.
     """
-    deadline = time.monotonic() + cfg.element_timeout
+    deadline = time.monotonic() + (
+        cfg.element_timeout if timeout is None else timeout
+    )
     while time.monotonic() < deadline:
         if _find_first(driver, market.in_cart_marker) is not None:
             return "маркер «в корзине»"
@@ -207,33 +228,57 @@ def add_sku(driver: WebDriver, sku: str, cfg: Settings) -> SkuResult:
     except TimeoutException:
         log.debug("SKU %s: контейнер карточки не найден, ищу кнопку по странице", sku)
 
+    # Кнопка появляется в разметке раньше, чем к ней привязывается обработчик:
+    # ранний клик проходит «в пустоту». Даём странице дожить до рабочего
+    # состояния, прежде чем что-то нажимать.
+    if cfg.settle_delay > 0:
+        time.sleep(cfg.settle_delay)
+
     if _find_first(driver, market.in_cart_marker) is not None:
         return SkuResult(sku, Outcome.ALREADY, "Уже в корзине", _since(started))
 
-    button, selector = find_add_button(driver, cfg, market)
-    if button is None:
-        if _find_first(driver, market.out_of_stock) is not None:
-            return SkuResult(
-                sku, Outcome.OUT_OF_STOCK, "Нет в наличии", _since(started)
-            )
-        return SkuResult(
-            sku, Outcome.ERROR, "Кнопка «В корзину» не найдена", _since(started)
+    attempts = max(1, cfg.click_attempts)
+    selector = ""
+    for attempt in range(1, attempts + 1):
+        button, selector = find_add_button(driver, cfg, market)
+        if button is None:
+            if _find_first(driver, market.out_of_stock) is not None:
+                return SkuResult(
+                    sku, Outcome.OUT_OF_STOCK, "Нет в наличии", _since(started)
+                )
+            if attempt == 1:
+                return SkuResult(
+                    sku, Outcome.ERROR, "Кнопка «В корзину» не найдена", _since(started)
+                )
+            break
+
+        try:
+            before = (button.text or "").strip()
+        except WebDriverException:
+            before = ""
+
+        _scroll_into_view(driver, button)
+        try:
+            _click(driver, button)
+        except (NoSuchElementException, WebDriverException) as exc:
+            log.debug("SKU %s: клик %s не прошёл: %s", sku, attempt, exc)
+            continue
+
+        # Промежуточным попыткам даём мало времени: если обработчик ещё не
+        # привязан, ждать полный таймаут бессмысленно, лучше кликнуть снова.
+        # Последней попытке — полный, это последний шанс.
+        timeout = (
+            cfg.element_timeout
+            if attempt == attempts
+            else min(_RETRY_CONFIRM_TIMEOUT, cfg.element_timeout)
         )
-
-    try:
-        before = (button.text or "").strip()
-    except WebDriverException:
-        before = ""
-
-    try:
-        _click(driver, button)
-    except (NoSuchElementException, WebDriverException) as exc:
-        return SkuResult(sku, Outcome.ERROR, str(exc).splitlines()[0], _since(started))
-
-    evidence = _confirm_added(driver, cfg, market, button, before)
-    if evidence is not None:
-        time.sleep(cfg.micro_pause)
-        return SkuResult(sku, Outcome.ADDED, f"Добавлен: {evidence}", _since(started))
+        evidence = _confirm_added(driver, cfg, market, button, before, timeout)
+        if evidence is not None:
+            time.sleep(cfg.micro_pause)
+            note = f"Добавлен: {evidence}"
+            if attempt > 1:
+                note += f", с попытки {attempt}"
+            return SkuResult(sku, Outcome.ADDED, note, _since(started))
 
     if _find_first(driver, market.out_of_stock) is not None:
         return SkuResult(sku, Outcome.OUT_OF_STOCK, "Нет в наличии", _since(started))

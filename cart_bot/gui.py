@@ -75,6 +75,8 @@ class CartBotApp(ttk.Frame):
         self.retries_var = tk.IntVar(value=1)
         self.share_var = tk.BooleanVar(value=True)
         self.captcha_var = tk.DoubleVar(value=120.0)
+        self.settle_var = tk.DoubleVar(value=2.0)
+        self.clicks_var = tk.IntVar(value=3)
         self.attach_var = tk.BooleanVar(value=False)
         self.address_var = tk.StringVar(value="127.0.0.1:9222")
         self.pace_var = tk.BooleanVar(value=False)
@@ -146,6 +148,21 @@ class CartBotApp(ttk.Frame):
             width=5,
             textvariable=self.captcha_var,
         ).grid(row=1, column=14)
+
+        ttk.Label(box, text="Пауза до клика, с:").grid(row=1, column=15, padx=(12, 4))
+        ttk.Spinbox(
+            box,
+            from_=0.0,
+            to=10.0,
+            increment=0.5,
+            width=5,
+            textvariable=self.settle_var,
+        ).grid(row=1, column=16, padx=(0, 12))
+
+        ttk.Label(box, text="Кликов:").grid(row=1, column=17, padx=(0, 4))
+        ttk.Spinbox(
+            box, from_=1, to=5, width=4, textvariable=self.clicks_var
+        ).grid(row=1, column=18)
 
         ttk.Checkbutton(box, text="Headless", variable=self.headless_var).grid(
             row=1, column=10, padx=(0, 8)
@@ -391,6 +408,8 @@ class CartBotApp(ttk.Frame):
         cfg.max_workers = max(1, int(self.workers_var.get()))
         cfg.fetch_share_link = bool(self.share_var.get())
         cfg.captcha_wait = float(self.captcha_var.get())
+        cfg.settle_delay = float(self.settle_var.get())
+        cfg.click_attempts = max(1, int(self.clicks_var.get()))
         cfg.attach_to_chrome = bool(self.attach_var.get())
         cfg.debug_address = self.address_var.get().strip() or "127.0.0.1:9222"
         cfg.human_pace = bool(self.pace_var.get())
