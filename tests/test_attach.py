@@ -2,7 +2,6 @@ import unittest
 
 from cart_bot.config import Settings
 from cart_bot.driver import _patterns_for
-from cart_bot.runner import merge_batches
 
 
 class AttachModeTest(unittest.TestCase):
@@ -47,26 +46,6 @@ class AttachModeTest(unittest.TestCase):
 
     def test_attach_is_off_by_default(self):
         self.assertFalse(Settings().attach_to_chrome)
-
-
-class MergeBatchesTest(unittest.TestCase):
-    """В одном браузере корзина одна, поэтому вкладки сливаются в один список."""
-
-    def test_keeps_order_across_tabs(self):
-        self.assertEqual(
-            merge_batches([["1", "2"], ["3"], ["4", "5"]]),
-            ["1", "2", "3", "4", "5"],
-        )
-
-    def test_drops_repeats_between_tabs(self):
-        # При отдельных корзинах повтор был осмыслен, здесь это одна позиция.
-        self.assertEqual(merge_batches([["1", "2"], ["2", "3"]]), ["1", "2", "3"])
-
-    def test_ignores_empty_tabs(self):
-        self.assertEqual(merge_batches([[], ["1"], []]), ["1"])
-
-    def test_empty_input(self):
-        self.assertEqual(merge_batches([]), [])
 
 
 class HumanPaceTest(unittest.TestCase):

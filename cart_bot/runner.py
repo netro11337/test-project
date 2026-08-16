@@ -86,23 +86,6 @@ class CartResult:
 Emit = Callable[[Event], None]
 
 
-def merge_batches(batches: Sequence[Sequence[str]]) -> List[str]:
-    """Сливает вкладки в один список для работы в единственном браузере.
-
-    Браузер один — значит и корзина одна, раскладывать по потокам нечего.
-    Порядок сохраняем, повторы убираем: один и тот же товар в двух вкладках
-    здесь уже не две корзины, а одна и та же позиция.
-    """
-    merged: List[str] = []
-    seen = set()
-    for batch in batches:
-        for sku in batch:
-            if sku not in seen:
-                seen.add(sku)
-                merged.append(sku)
-    return merged
-
-
 class CartRunner:
     """Собирает N независимых корзин параллельно.
 
@@ -131,19 +114,8 @@ class CartRunner:
             self.emit(Event(EventKind.ALL_DONE, message="Нет SKU для сборки"))
             return []
 
-        if self.cfg.attach_to_chrome and len(active) > 1:
-            merged = merge_batches([skus for _, skus in active])
-            active = [(1, merged)]
-            self.emit(
-                Event(
-                    EventKind.LOG,
-                    message=(
-                        f"Работаю в вашем браузере: он один, поэтому все "
-                        f"{len(merged)} SKU идут в одну корзину, потоки не "
-                        "используются."
-                    ),
-                )
-            )
+        if self.cfg.attach_to_chrome:
+            return self._run_rounds(active)
 
         # Больше воркеров, чем непустых потоков, поднимать незачем.
         workers = min(self.cfg.max_workers, len(active))
@@ -168,6 +140,64 @@ class CartRunner:
                     self.emit(Event(EventKind.THREAD_FAILED, message=str(exc)))
 
         carts.sort(key=lambda c: c.thread_id)
+        self.emit(Event(EventKind.ALL_DONE, message="Сборка завершена"))
+        return carts
+
+    def _run_rounds(self, active) -> List[CartResult]:
+        """Прогоняет вкладки по очереди в одном браузере.
+
+        Браузер один, поэтому параллелить нечего: вкладка за вкладкой, и между
+        кругами корзина очищается — иначе товары предыдущего круга попадут в
+        следующую ссылку.
+        """
+        rounds = len(active)
+        if rounds > 1 and not self.cfg.clear_cart_after:
+            self.emit(
+                Event(
+                    EventKind.LOG,
+                    message=(
+                        "ВНИМАНИЕ: кругов несколько, а очистка корзины "
+                        "выключена — каждая следующая ссылка будет включать "
+                        "товары предыдущих кругов."
+                    ),
+                )
+            )
+
+        self.emit(
+            Event(
+                EventKind.LOG,
+                message=(
+                    f"Работаю в вашем браузере: {rounds} круг(ов) по очереди, "
+                    "каждый со своей ссылкой."
+                ),
+            )
+        )
+
+        carts: List[CartResult] = []
+        driver = None
+        try:
+            driver = create_driver(self.cfg, self.cfg.profile_for(1))
+
+            # Разогрев нужен один раз на браузер, а не на каждый круг.
+            if self.cfg.warm_up and not warm_up(driver, self.cfg):
+                self._survive_block(driver, active[0][0])
+
+            for number, (thread_id, skus) in enumerate(active, start=1):
+                if self._cancel.is_set():
+                    break
+                self.emit(
+                    Event(
+                        EventKind.LOG,
+                        message=f"— Круг {number} из {rounds} —",
+                    )
+                )
+                carts.append(self._collect(driver, thread_id, skus))
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Сборка в браузере пользователя упала")
+            self.emit(Event(EventKind.THREAD_FAILED, message=str(exc)))
+        finally:
+            quit_driver(driver, owned=False)
+
         self.emit(Event(EventKind.ALL_DONE, message="Сборка завершена"))
         return carts
 
@@ -245,12 +275,29 @@ class CartRunner:
         return passed
 
     def _run_thread(self, thread_id: int, skus: List[str]) -> CartResult:
+        """Отдельный браузер под один список SKU."""
+        driver = None
+        try:
+            driver = create_driver(self.cfg, self.cfg.profile_for(thread_id))
+            if self.cfg.warm_up and not warm_up(driver, self.cfg):
+                self._survive_block(driver, thread_id)
+            return self._collect(driver, thread_id, skus)
+        finally:
+            # Чужой браузер не закрываем — у пользователя схлопнутся вкладки.
+            quit_driver(driver, owned=not self.cfg.attach_to_chrome)
+
+    def _collect(self, driver, thread_id: int, skus: List[str]) -> CartResult:
+        """Собирает одну корзину в уже открытом браузере и берёт ссылку.
+
+        Отделено от создания браузера: в режиме «мой Chrome» один и тот же
+        браузер отрабатывает несколько кругов подряд, очищая корзину между
+        ними.
+        """
         started = time.monotonic()
-        profile = self.cfg.profile_for(thread_id)
         cart = CartResult(
             thread_id=thread_id,
             total=len(skus),
-            profile=str(profile),
+            profile=str(self.cfg.profile_for(thread_id)),
             url=self.cfg.market.cart_url,
         )
 
@@ -262,13 +309,7 @@ class CartRunner:
             )
         )
 
-        driver = None
         try:
-            driver = create_driver(self.cfg, profile)
-
-            if self.cfg.warm_up and not warm_up(driver, self.cfg):
-                self._survive_block(driver, thread_id)
-
             for sku in skus:
                 if self._cancel.is_set():
                     cart.error = "Отменено пользователем"
@@ -365,9 +406,6 @@ class CartRunner:
         except Exception as exc:  # noqa: BLE001
             cart.error = str(exc).splitlines()[0]
             log.exception("Поток %s: ошибка", thread_id)
-        finally:
-            # Чужой браузер не закрываем — у пользователя схлопнутся вкладки.
-            quit_driver(driver, owned=not self.cfg.attach_to_chrome)
 
         cart.elapsed = round(time.monotonic() - started, 2)
         self.emit(Event(EventKind.THREAD_DONE, thread_id=thread_id, cart=cart))

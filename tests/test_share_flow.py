@@ -87,9 +87,15 @@ class ShareModalMarkupTest(unittest.TestCase):
 
     def test_clear_button_is_not_the_share_button(self):
         # Перепутать их — значит удалить корзину вместо получения ссылки.
-        share = {id(e) for x in OZON.share_buttons for e in self.cart.xpath(x)}
-        clear = {id(e) for x in OZON.cart_clear_buttons for e in self.cart.xpath(x)}
-        self.assertFalse(share & clear, "селекторы пересекаются")
+        # Сравниваем по пути в документе: id() у обёрток lxml нестабилен.
+        tree = self.cart.getroottree()
+        share = {tree.getpath(e) for x in OZON.share_buttons for e in self.cart.xpath(x)}
+        clear = {
+            tree.getpath(e) for x in OZON.cart_clear_buttons for e in self.cart.xpath(x)
+        }
+        self.assertTrue(share, "кнопка «Поделиться» не найдена")
+        self.assertTrue(clear, "кнопка удаления не найдена")
+        self.assertFalse(share & clear, f"селекторы пересекаются: {share & clear}")
 
 
 class FindShareConfirmTest(unittest.TestCase):
