@@ -292,12 +292,7 @@ function parseQty_(v) {
  */
 function readSourceStocks_(shop) {
   var name = (shop && shop.sheet) || CONFIG.SOURCE_SHEET;
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sh = ss.getSheetByName(name);
-  if (!sh) {
-    throw new Error('Не найден лист «' + name +
-      '». Проверьте название листа в настройках (Config.gs).');
-  }
+  var sh = findSheet_(name);
 
   var values = sh.getDataRange().getValues();
   var skuAliases = sourceIdAliases_(shop);
@@ -360,6 +355,29 @@ function readSourceStocks_(shop) {
     throw new Error('На листе «' + name + '» нет ни одной строки с данными.');
   }
   return { map: map, rows: rows, problems: problems };
+}
+
+/**
+ * Ищет лист по названию. Точное совпадение, затем без учёта регистра и
+ * лишних пробелов — «НАПАЛМ ОСТАТКИ» и «Напалм остатки» это один лист.
+ */
+function findSheet_(name) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(name);
+  if (sh) return sh;
+
+  var wanted = normHeader_(name);
+  var sheets = ss.getSheets();
+  var names = [];
+
+  for (var i = 0; i < sheets.length; i++) {
+    var actual = sheets[i].getName();
+    names.push(actual);
+    if (normHeader_(actual) === wanted) return sheets[i];
+  }
+
+  throw new Error('Не найден лист «' + name + '». Листы в таблице: ' +
+    names.join(', ') + '. Поправьте название в настройках (поле sheet).');
 }
 
 /** Папка Диска по ID с понятной ошибкой, если ID не задан или неверен. */
