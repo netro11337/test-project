@@ -6,11 +6,12 @@ import logging
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Optional, Tuple
 
 from selenium.common.exceptions import (
     ElementClickInterceptedException,
     NoSuchElementException,
+    StaleElementReferenceException,
     TimeoutException,
     WebDriverException,
 )
@@ -101,19 +102,61 @@ def _click(driver: WebDriver, element: WebElement) -> None:
         driver.execute_script("arguments[0].click();", element)
 
 
-def _confirm_added(driver: WebDriver, cfg: Settings, market: Market) -> bool:
-    """Ждёт, пока кнопка не переключится в состояние «в корзине».
+def find_add_button(
+    driver: WebDriver, cfg: Settings, market: Market
+) -> Tuple[Optional[WebElement], str]:
+    """Ищет кнопку «В корзину», перебирая кандидатов по порядку.
 
-    Ждём именно смену состояния, а не фиксированный sleep: на быстрой
-    странице это десятки миллисекунд.
+    Возвращает ещё и сработавший селектор: когда магазин перерисует вёрстку,
+    по логу будет видно, какой вариант ещё живой.
     """
-    try:
-        WebDriverWait(driver, cfg.element_timeout, poll_frequency=0.1).until(
-            EC.presence_of_element_located((By.XPATH, market.in_cart_marker))
-        )
-        return True
-    except TimeoutException:
-        return False
+    deadline = time.monotonic() + cfg.element_timeout
+    while True:
+        for xpath in market.add_buttons:
+            try:
+                elements = driver.find_elements(By.XPATH, xpath)
+            except WebDriverException:
+                continue
+            for element in elements:
+                try:
+                    if element.is_displayed() and element.is_enabled():
+                        return element, xpath
+                except WebDriverException:
+                    continue
+        if time.monotonic() >= deadline:
+            return None, ""
+        time.sleep(0.15)
+
+
+def _confirm_added(
+    driver: WebDriver,
+    cfg: Settings,
+    market: Market,
+    button: WebElement,
+    before: str,
+) -> bool:
+    """Ждёт подтверждения, что товар оказался в корзине.
+
+    Считаем успехом любой из признаков: появился маркер «в корзине» либо сама
+    кнопка изменилась — исчезла, отвалилась из DOM или сменила надпись.
+    Опираться только на один текст рискованно: магазин их меняет, и тогда
+    добавленный товар засчитывался бы как ошибка.
+    """
+    deadline = time.monotonic() + cfg.element_timeout
+    while time.monotonic() < deadline:
+        if _find_first(driver, market.in_cart_marker) is not None:
+            return True
+        try:
+            if not button.is_displayed():
+                return True
+            if (button.text or "").strip() != before:
+                return True
+        except StaleElementReferenceException:
+            return True
+        except WebDriverException:
+            return True
+        time.sleep(0.1)
+    return False
 
 
 def add_sku(driver: WebDriver, sku: str, cfg: Settings) -> SkuResult:
@@ -145,23 +188,19 @@ def add_sku(driver: WebDriver, sku: str, cfg: Settings) -> SkuResult:
     if _find_first(driver, market.not_found) is not None:
         return SkuResult(sku, Outcome.NOT_FOUND, "Товар не найден", _since(started))
 
+    # Ждём отрисовку страницы, но не считаем это провалом: контейнер магазин
+    # переименовывает, а кнопка при этом на месте — ищем её в любом случае.
     try:
-        WebDriverWait(driver, cfg.element_timeout, poll_frequency=0.1).until(
+        WebDriverWait(driver, cfg.element_timeout / 2, poll_frequency=0.1).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, market.add_widget))
         )
     except TimeoutException:
-        if _find_first(driver, market.out_of_stock) is not None:
-            return SkuResult(
-                sku, Outcome.OUT_OF_STOCK, "Нет в наличии", _since(started)
-            )
-        return SkuResult(
-            sku, Outcome.ERROR, "Кнопка добавления не появилась", _since(started)
-        )
+        log.debug("SKU %s: контейнер карточки не найден, ищу кнопку по странице", sku)
 
     if _find_first(driver, market.in_cart_marker) is not None:
         return SkuResult(sku, Outcome.ALREADY, "Уже в корзине", _since(started))
 
-    button = _find_first(driver, market.add_button)
+    button, selector = find_add_button(driver, cfg, market)
     if button is None:
         if _find_first(driver, market.out_of_stock) is not None:
             return SkuResult(
@@ -172,13 +211,18 @@ def add_sku(driver: WebDriver, sku: str, cfg: Settings) -> SkuResult:
         )
 
     try:
+        before = (button.text or "").strip()
+    except WebDriverException:
+        before = ""
+
+    try:
         _click(driver, button)
     except (NoSuchElementException, WebDriverException) as exc:
         return SkuResult(sku, Outcome.ERROR, str(exc).splitlines()[0], _since(started))
 
-    if _confirm_added(driver, cfg, market):
+    if _confirm_added(driver, cfg, market, button, before):
         time.sleep(cfg.micro_pause)
-        return SkuResult(sku, Outcome.ADDED, "Добавлен", _since(started))
+        return SkuResult(sku, Outcome.ADDED, f"Добавлен ({selector})", _since(started))
 
     if _find_first(driver, market.out_of_stock) is not None:
         return SkuResult(sku, Outcome.OUT_OF_STOCK, "Нет в наличии", _since(started))

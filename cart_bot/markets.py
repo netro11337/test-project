@@ -19,8 +19,11 @@ class Market:
     cart_url: str
 
     # --- карточка товара ---
-    add_widget: str  # CSS: контейнер, по появлению которого страница готова
-    add_button: str  # XPath: кнопка «Добавить в корзину»
+    add_widget: str  # CSS: контейнер-подсказка, что страница отрисовалась
+    # XPath-кандидаты кнопки «В корзину», по порядку надёжности. Список, а не
+    # один селектор: магазин перерисовывает вёрстку, и привязка к одному
+    # контейнеру ломает работу целиком.
+    add_buttons: Tuple[str, ...]
     in_cart_marker: str  # XPath: признак, что товар уже в корзине
     out_of_stock: str  # XPath
     not_found: str  # XPath
@@ -44,14 +47,19 @@ OZON = Market(
     base_url="https://www.ozon.ru",
     product_url="https://www.ozon.ru/product/{sku}/",
     cart_url="https://www.ozon.ru/cart",
-    add_widget="div[data-widget='webAddToCart']",
-    add_button=(
-        "//div[@data-widget='webAddToCart']"
-        "//button[contains(., 'корзин') or contains(., 'Купить')]"
+    add_widget="div[data-widget='webAddToCart'], div[data-widget='webProductHeading']",
+    # «Купить сейчас» намеренно не ищем: она ведёт прямо в оформление заказа,
+    # а нам нужна только корзина. «Перейти в корзину» тоже исключаем — это
+    # ссылка на уже собранную корзину, а не добавление.
+    add_buttons=(
+        "//div[@data-widget='webAddToCart']//button[contains(., 'В корзину')]",
+        "//button[contains(., 'В корзину') and not(contains(., 'Перейти'))]",
+        "//button[contains(., 'Добавить в корзину')]",
+        "//div[@data-widget='webAddToCart']//button",
     ),
     in_cart_marker=(
-        "//div[@data-widget='webAddToCart']"
-        "//*[contains(., 'В корзине') or contains(., 'Перейти в корзину')]"
+        "//button[contains(., 'В корзине')]"
+        " | //div[@data-widget='webAddToCart']//*[contains(., 'Перейти в корзину')]"
     ),
     out_of_stock=(
         "//*[contains(text(), 'Этот товар закончил')"
@@ -94,10 +102,11 @@ WB = Market(
     product_url="https://www.wildberries.ru/catalog/{sku}/detail.aspx",
     cart_url="https://www.wildberries.ru/lk/basket",
     add_widget="div.product-page__aside-container, div.product-page, button.order__button",
-    add_button=(
-        "//button[contains(@class, 'order__button')]"
-        " | //button[contains(., 'Добавить в корзину')]"
-        " | //a[contains(@class, 'order__button')]"
+    add_buttons=(
+        "//button[contains(@class, 'order__button')]",
+        "//button[contains(., 'Добавить в корзину')]",
+        "//button[contains(., 'В корзину') and not(contains(., 'Перейти'))]",
+        "//a[contains(@class, 'order__button')]",
     ),
     in_cart_marker=(
         "//*[contains(text(), 'Товар в корзине')"
