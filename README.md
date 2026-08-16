@@ -6,12 +6,25 @@
 
 Этот проект предоставляет полнофункциональное решение для автоматической регистрации аккаунтов на платформе Ozon. Система включает:
 
+### Основные функции:
 - ✅ Валидацию данных (email, телефон, пароль)
 - ✅ Регистрацию одного или нескольких аккаунтов
+- ✅ Интеграцию с внешними SMS сервисами
+- ✅ Автоматическое обновление профиля (ФИО, дата рождения)
+- ✅ Установку пункта выдачи (ПВЗ) из списка
+- ✅ Привязку email к аккаунту
+- ✅ Экспорт результатов в форматах JSON и номер:почта
 - ✅ Обработку ошибок с детальной информацией
-- ✅ Экспорт результатов в JSON формат
 - ✅ Интеграция с Ozon API
 - ✅ Поддержку конфигурационных файлов
+
+### Поток работы:
+1️⃣ Регистрация нового аккаунта
+2️⃣ Получение SMS кода с внешнего сервиса
+3️⃣ Установка случайного ФИО и даты рождения
+4️⃣ Выбор и установка ПВЗ из вашего списка
+5️⃣ Привязка email адреса
+6️⃣ Вывод результата в формате: номер:почта
 
 ## 🚀 Быстрый старт
 
@@ -43,6 +56,60 @@ python example_usage.py
 ```
 
 ## 📖 Использование
+
+### 🆕 Полный цикл регистрации (новое!)
+
+```python
+from ozon_autoregister import OzonAutoRegister, OzonAccount
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Инициализация с SMS сервисом
+registrar = OzonAutoRegister(
+    api_key=os.getenv("OZON_API_KEY"),
+    sms_service_url=os.getenv("SMS_SERVICE_URL"),
+    sms_api_key=os.getenv("SMS_API_KEY")
+)
+
+# Установка списка ПВЗ
+registrar.set_pvz_list([
+    "pvz_001",
+    "pvz_002",
+    "pvz_003",
+])
+
+# Создание аккаунта
+account = OzonAccount(
+    email="user@example.com",
+    password="SecurePass123",
+    phone="+79101234567",
+    first_name="Иван",
+    last_name="Петров"
+)
+
+# Полный цикл:
+# 1. Регистрация
+# 2. Получение SMS
+# 3. Установка случайного ФИО и даты рождения
+# 4. Выбор ПВЗ
+# 5. Привязка email
+success, message, result = registrar.complete_registration_workflow(account)
+
+if success:
+    print(f"✓ Готово: {result}")  # Вывод: +79101234567:user@example.com
+else:
+    print(f"✗ Ошибка: {message}")
+
+# Получить все результаты в формате номер:почта
+results = registrar.get_formatted_results()
+for res in results:
+    print(res)
+
+# Экспортировать результаты
+registrar.export_formatted_results("results.txt")
+```
 
 ### Базовая регистрация
 
@@ -116,16 +183,60 @@ is_valid = registrar.validate_phone("+79101234567")
 is_valid, message = registrar.validate_password("StrongPass123")
 ```
 
+## 🔗 SMS Интеграция
+
+Система поддерживает интеграцию с внешними SMS сервисами:
+
+- **SMS-Perfect** - надежный российский сервис (1-3 руб за SMS)
+- **Twilio** - международный сервис
+- **Smspilot** - доступный российский сервис (1-2 руб за SMS)
+- **Собственный API** - используйте свой SMS сервис
+
+Подробнее см. [SMS_INTEGRATION.md](SMS_INTEGRATION.md)
+
+### Настройка SMS:
+
+```bash
+# .env файл
+SMS_SERVICE_URL=https://api.sms-perfect.ru
+SMS_API_KEY=your_api_key
+```
+
+## 📊 Формат вывода результатов
+
+### Формат номер:почта
+
+```
++79101234567:user1@example.com
++79101234568:user2@example.com
++79101234569:user3@example.com
+```
+
+Экспорт результатов:
+
+```python
+# В текстовый файл
+registrar.export_formatted_results("results.txt")
+
+# Получить в памяти
+results = registrar.get_formatted_results()
+```
+
 ## 📁 Структура проекта
 
 ```
-├── ozon_autoregister.py    # Основной модуль
-├── config.yaml             # Файл конфигурации
-├── requirements.txt        # Зависимости Python
-├── .env.example           # Пример переменных окружения
-├── example_usage.py       # Примеры использования
-├── README.md              # Этот файл
-└── results/               # Папка для результатов
+├── ozon_autoregister.py         # Основной модуль с регистрацией
+├── cli.py                        # Командная строка
+├── example_usage.py              # Примеры базовой регистрации
+├── example_complete_workflow.py  # Примеры полного цикла
+├── config.yaml                   # Файл конфигурации
+├── requirements.txt              # Зависимости Python
+├── .env.example                  # Пример переменных окружения
+├── .gitignore                    # Игнорировать файлы
+├── SMS_INTEGRATION.md            # Руководство SMS интеграции
+├── README.md                     # Этот файл
+├── test_ozon_autoregister.py    # Модульные тесты (24 теста)
+└── results/                      # Папка для результатов (создается автоматически)
 ```
 
 ## 🔒 Требования к паролю

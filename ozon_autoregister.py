@@ -7,9 +7,11 @@ import re
 import json
 import time
 import requests
-from typing import Dict, Optional, Tuple
-from datetime import datetime
+import random
+from typing import Dict, Optional, Tuple, List
+from datetime import datetime, timedelta
 from dataclasses import dataclass
+from faker import Faker
 
 
 @dataclass
@@ -22,6 +24,232 @@ class OzonAccount:
     last_name: str
     created_at: str = None
     account_id: str = None
+    sms_code: str = None
+    birth_date: str = None  # YYYY-MM-DD
+    pvz_id: str = None  # ID пункта выдачи
+    middle_name: str = None
+
+
+class SMSService:
+    """Сервис для получения SMS кодов"""
+
+    def __init__(self, service_url: str = None, api_key: str = None):
+        """
+        Инициализация SMS сервиса
+
+        Args:
+            service_url: URL SMS сервиса
+            api_key: API ключ для SMS сервиса
+        """
+        self.service_url = service_url or "https://sms-service.example.com/api"
+        self.api_key = api_key
+        self.session = requests.Session()
+
+    def get_sms_code(self, phone: str) -> Optional[str]:
+        """
+        Получить SMS код для номера телефона
+
+        Args:
+            phone: Номер телефона
+
+        Returns:
+            SMS код или None при ошибке
+        """
+        try:
+            # Нормализуем номер
+            phone_normalized = re.sub(r'\D', '', phone)
+
+            headers = {}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+
+            response = self.session.get(
+                f"{self.service_url}/get-sms",
+                params={"phone": phone_normalized},
+                headers=headers,
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                sms_code = data.get("code")
+                return sms_code
+
+            return None
+
+        except Exception as e:
+            print(f"Ошибка при получении SMS: {str(e)}")
+            return None
+
+    def verify_sms_code(self, phone: str, code: str) -> bool:
+        """
+        Проверить SMS код
+
+        Args:
+            phone: Номер телефона
+            code: SMS код
+
+        Returns:
+            True если код верный
+        """
+        try:
+            phone_normalized = re.sub(r'\D', '', phone)
+
+            headers = {}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+
+            response = self.session.post(
+                f"{self.service_url}/verify-sms",
+                json={"phone": phone_normalized, "code": code},
+                headers=headers,
+                timeout=10
+            )
+
+            return response.status_code == 200
+
+        except Exception:
+            return False
+
+
+class ProfileUpdater:
+    """Обновление профиля Ozon аккаунта"""
+
+    def __init__(self, api_key: str = None):
+        """
+        Инициализация обновления профиля
+
+        Args:
+            api_key: API ключ Ozon
+        """
+        self.api_key = api_key
+        self.session = requests.Session()
+        self.faker = Faker('ru_RU')
+
+    def generate_random_profile(self) -> Dict:
+        """
+        Генерирует случайные данные профиля
+
+        Returns:
+            Словарь с данными профиля
+        """
+        # Случайная дата рождения (18-70 лет)
+        age = random.randint(18, 70)
+        birth_date = datetime.now() - timedelta(days=age*365 + random.randint(0, 365))
+
+        # Случайное ФИО на русском
+        first_name = self.faker.first_name()
+        last_name = self.faker.last_name()
+        middle_name = self.faker.middle_name()
+
+        return {
+            "first_name": first_name,
+            "last_name": last_name,
+            "middle_name": middle_name,
+            "birth_date": birth_date.strftime("%Y-%m-%d")
+        }
+
+    def update_profile(self, account_id: str, profile_data: Dict) -> Tuple[bool, str]:
+        """
+        Обновить профиль аккаунта
+
+        Args:
+            account_id: ID аккаунта
+            profile_data: Данные профиля
+
+        Returns:
+            Кортеж (успешно, сообщение)
+        """
+        try:
+            headers = {
+                "Content-Type": "application/json",
+            }
+
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+
+            response = self.session.post(
+                f"https://api.ozon.ru/accounts/{account_id}/profile",
+                json=profile_data,
+                headers=headers,
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                return True, "Профиль успешно обновлен"
+            else:
+                return False, f"Ошибка при обновлении профиля: {response.status_code}"
+
+        except Exception as e:
+            return False, f"Ошибка: {str(e)}"
+
+    def set_pvz(self, account_id: str, pvz_id: str) -> Tuple[bool, str]:
+        """
+        Установить пункт выдачи (ПВЗ)
+
+        Args:
+            account_id: ID аккаунта
+            pvz_id: ID пункта выдачи
+
+        Returns:
+            Кортеж (успешно, сообщение)
+        """
+        try:
+            headers = {
+                "Content-Type": "application/json",
+            }
+
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+
+            response = self.session.post(
+                f"https://api.ozon.ru/accounts/{account_id}/pvz",
+                json={"pvz_id": pvz_id},
+                headers=headers,
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                return True, "ПВЗ успешно установлена"
+            else:
+                return False, f"Ошибка при установке ПВЗ: {response.status_code}"
+
+        except Exception as e:
+            return False, f"Ошибка: {str(e)}"
+
+    def link_email(self, account_id: str, email: str) -> Tuple[bool, str]:
+        """
+        Привязать email к аккаунту
+
+        Args:
+            account_id: ID аккаунта
+            email: Email адрес
+
+        Returns:
+            Кортеж (успешно, сообщение)
+        """
+        try:
+            headers = {
+                "Content-Type": "application/json",
+            }
+
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+
+            response = self.session.post(
+                f"https://api.ozon.ru/accounts/{account_id}/email",
+                json={"email": email},
+                headers=headers,
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                return True, "Email успешно привязан"
+            else:
+                return False, f"Ошибка при привязке email: {response.status_code}"
+
+        except Exception as e:
+            return False, f"Ошибка: {str(e)}"
 
 
 class OzonAutoRegister:
@@ -33,19 +261,34 @@ class OzonAutoRegister:
     OZON_API_BASE = "https://api.ozon.ru"
     OZON_AUTH_URL = "https://auth.ozon.ru"
 
-    def __init__(self, api_key: str = None, client_id: str = None):
+    def __init__(self, api_key: str = None, client_id: str = None,
+                 sms_service_url: str = None, sms_api_key: str = None,
+                 pvz_list: List[str] = None):
         """
         Инициализация регистратора Ozon
 
         Args:
             api_key: API ключ Ozon
             client_id: Client ID для OAuth
+            sms_service_url: URL SMS сервиса
+            sms_api_key: API ключ для SMS сервиса
+            pvz_list: Список ID пунктов выдачи (ПВЗ)
         """
         self.api_key = api_key
         self.client_id = client_id
         self.session = requests.Session()
         self.registered_accounts = []
         self.errors = []
+        self.completed_accounts = []  # Полностью завершенные аккаунты
+
+        # SMS сервис
+        self.sms_service = SMSService(sms_service_url, sms_api_key)
+
+        # Обновление профиля
+        self.profile_updater = ProfileUpdater(api_key)
+
+        # Список ПВЗ
+        self.pvz_list = pvz_list or self._get_default_pvz_list()
 
     def validate_email(self, email: str) -> bool:
         """Проверка корректности email адреса"""
@@ -233,12 +476,176 @@ class OzonAutoRegister:
 
         return results
 
+    def batch_complete_workflow(self, accounts: list,
+                               use_random_profile: bool = True) -> Dict:
+        """
+        Полный цикл для нескольких аккаунтов
+
+        Args:
+            accounts: Список OzonAccount объектов
+            use_random_profile: Использовать случайные профили
+
+        Returns:
+            Словарь с результатами
+        """
+        results = {
+            "total": len(accounts),
+            "success": 0,
+            "failed": 0,
+            "completed_accounts": [],
+            "failed_accounts": [],
+            "results_formatted": []  # Формат: номер:почта
+        }
+
+        for i, account in enumerate(accounts):
+            print(f"\n{'='*60}")
+            print(f"Обработка аккаунта {i+1}/{len(accounts)}")
+            print(f"{'='*60}")
+
+            success, msg, formatted_result = self.complete_registration_workflow(
+                account,
+                use_random_profile
+            )
+
+            if success:
+                results["success"] += 1
+                results["completed_accounts"].append({
+                    "phone": account.phone,
+                    "email": account.email,
+                    "account_id": account.account_id,
+                    "pvz_id": account.pvz_id,
+                    "birth_date": account.birth_date
+                })
+                results["results_formatted"].append(formatted_result)
+                print(f"✓ {msg}")
+            else:
+                results["failed"] += 1
+                results["failed_accounts"].append({
+                    "phone": account.phone,
+                    "email": account.email,
+                    "error": msg
+                })
+                print(f"✗ {msg}")
+
+            # Задержка между аккаунтами
+            time.sleep(1)
+
+        return results
+
     def _normalize_phone(self, phone: str) -> str:
         """Нормализация номера телефона в формат 7XXXXXXXXXX"""
         digits = re.sub(r'\D', '', phone)
         if digits[0] == '8':
             digits = '7' + digits[1:]
         return f"+{digits}"
+
+    def _get_default_pvz_list(self) -> List[str]:
+        """Получить список ПВЗ по умолчанию"""
+        # Это примеры ID ПВЗ, используйте реальные ID из Ozon
+        return [
+            "00000000000000000001",
+            "00000000000000000002",
+            "00000000000000000003",
+            "00000000000000000004",
+            "00000000000000000005",
+        ]
+
+    def set_pvz_list(self, pvz_list: List[str]):
+        """Установить список ПВЗ"""
+        self.pvz_list = pvz_list
+
+    def complete_registration_workflow(self, account: OzonAccount,
+                                      use_random_profile: bool = True) -> Tuple[bool, str, Optional[str]]:
+        """
+        Полный цикл регистрации:
+        1. Регистрация аккаунта
+        2. Получение SMS кода
+        3. Обновление профиля
+        4. Установка ПВЗ
+        5. Привязка email
+
+        Args:
+            account: Объект OzonAccount
+            use_random_profile: Использовать случайные ФИО и дату рождения
+
+        Returns:
+            Кортеж (успешно, сообщение, результат в формате номер:почта)
+        """
+        # Шаг 1: Регистрация
+        print(f"[1/5] Регистрация аккаунта {account.email}...")
+        success, msg, account_id = self.register_account(account)
+
+        if not success:
+            error_msg = f"Ошибка регистрации: {msg}"
+            self.errors.append(error_msg)
+            return False, error_msg, None
+
+        account.account_id = account_id
+        print(f"✓ Аккаунт создан. ID: {account_id}")
+
+        # Шаг 2: Получение и проверка SMS
+        print(f"[2/5] Получение SMS кода для {account.phone}...")
+        sms_code = self.sms_service.get_sms_code(account.phone)
+
+        if not sms_code:
+            error_msg = "Не удалось получить SMS код"
+            self.errors.append(error_msg)
+            return False, error_msg, None
+
+        account.sms_code = sms_code
+        print(f"✓ SMS код получен: {sms_code}")
+
+        # Шаг 3: Обновление профиля
+        print(f"[3/5] Обновление профиля...")
+
+        if use_random_profile:
+            profile_data = self.profile_updater.generate_random_profile()
+            account.first_name = profile_data["first_name"]
+            account.last_name = profile_data["last_name"]
+            account.middle_name = profile_data["middle_name"]
+            account.birth_date = profile_data["birth_date"]
+        else:
+            profile_data = {
+                "first_name": account.first_name,
+                "last_name": account.last_name,
+                "middle_name": account.middle_name or "",
+                "birth_date": account.birth_date or ""
+            }
+
+        success, msg = self.profile_updater.update_profile(account_id, profile_data)
+        if not success:
+            print(f"⚠ Предупреждение при обновлении профиля: {msg}")
+        else:
+            print(f"✓ Профиль обновлен: {account.first_name} {account.last_name}")
+
+        # Шаг 4: Установка ПВЗ
+        print(f"[4/5] Установка ПВЗ...")
+        pvz_id = random.choice(self.pvz_list)
+        account.pvz_id = pvz_id
+
+        success, msg = self.profile_updater.set_pvz(account_id, pvz_id)
+        if not success:
+            print(f"⚠ Предупреждение при установке ПВЗ: {msg}")
+        else:
+            print(f"✓ ПВЗ установлена: {pvz_id}")
+
+        # Шаг 5: Привязка email
+        print(f"[5/5] Привязка email...")
+        success, msg = self.profile_updater.link_email(account_id, account.email)
+        if not success:
+            print(f"⚠ Предупреждение при привязке email: {msg}")
+        else:
+            print(f"✓ Email привязан: {account.email}")
+
+        # Сохранение завершенного аккаунта
+        self.registered_accounts.append(account)
+        self.completed_accounts.append(account)
+
+        # Форматированный результат
+        result = f"{account.phone}:{account.email}"
+
+        success_msg = f"Аккаунт полностью подготовлен. Результат: {result}"
+        return True, success_msg, result
 
     def get_registered_accounts(self) -> list:
         """Получить список зарегистрированных аккаунтов"""
@@ -267,6 +674,27 @@ class OzonAutoRegister:
             json.dump(results, f, ensure_ascii=False, indent=2)
 
         print(f"Результаты сохранены в {filepath}")
+
+    def export_formatted_results(self, filepath: str):
+        """Экспортировать результаты в формате номер:почта"""
+        formatted_results = []
+
+        for account in self.completed_accounts:
+            formatted_results.append(f"{account.phone}:{account.email}")
+
+        with open(filepath, 'w', encoding='utf-8') as f:
+            for result in formatted_results:
+                f.write(result + '\n')
+
+        print(f"Результаты экспортированы в {filepath} ({len(formatted_results)} аккаунтов)")
+        return formatted_results
+
+    def get_formatted_results(self) -> List[str]:
+        """Получить результаты в формате номер:почта"""
+        results = []
+        for account in self.completed_accounts:
+            results.append(f"{account.phone}:{account.email}")
+        return results
 
 
 def create_test_accounts(count: int = 3) -> list:
