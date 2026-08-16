@@ -94,17 +94,10 @@ def create_driver(
     driver.set_page_load_timeout(cfg.page_load_timeout)
     driver.set_script_timeout(cfg.page_load_timeout)
 
-    try:
-        driver.execute_cdp_cmd(
-            "Page.addScriptToEvaluateOnNewDocument",
-            {
-                "source": "Object.defineProperty(navigator, 'webdriver', "
-                "{get: () => undefined});"
-            },
-        )
-    except Exception as exc:  # noqa: BLE001 - CDP не критичен для работы
-        log.debug("CDP-настройки не применились: %s", exc)
-
+    # Подмены navigator.webdriver здесь намеренно нет. Она не только пытается
+    # выдать браузер за другой, но и работает против себя: подставленное
+    # свойство висит на самом объекте navigator, тогда как настоящее живёт в
+    # Navigator.prototype, и эта разница — известный признак автоматизации.
     apply_resource_blocking(driver, cfg)
     return driver
 
@@ -130,7 +123,7 @@ def apply_resource_blocking(driver: webdriver.Chrome, cfg: Settings) -> None:
         log.debug("Не включил блокировку ресурсов: %s", exc)
 
 
-def clear_resource_blocking(driver: webdriver.Chrome) -> None:
+def clear_resource_blocking(driver: webdriver.Chrome) -> bool:
     """Снимает блокировку ресурсов.
 
     Нужно на странице проверки: пазл в капче — это картинка, и с включённой
@@ -139,8 +132,10 @@ def clear_resource_blocking(driver: webdriver.Chrome) -> None:
     try:
         driver.execute_cdp_cmd("Network.enable", {})
         driver.execute_cdp_cmd("Network.setBlockedURLs", {"urls": []})
+        return True
     except Exception as exc:  # noqa: BLE001
         log.debug("Не снял блокировку ресурсов: %s", exc)
+        return False
 
 
 def quit_driver(driver: Optional[webdriver.Chrome]) -> None:

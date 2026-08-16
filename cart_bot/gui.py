@@ -10,6 +10,7 @@ from tkinter import messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 from typing import Dict, List
 
+from . import __version__
 from .clipboard import enable_clipboard_hotkeys
 from .config import Settings, ensure_app_dir
 from .markets import DEFAULT_MARKET, MARKETS
@@ -26,7 +27,9 @@ POLL_MS = 80
 class CartBotApp(ttk.Frame):
     def __init__(self, master: tk.Tk):
         super().__init__(master, padding=10)
-        self.master.title("Ozon / Wildberries — параллельная сборка корзин")
+        self.master.title(
+            f"Ozon / Wildberries — параллельная сборка корзин  v{__version__}"
+        )
         self.master.geometry("1180x780")
         self.master.minsize(980, 660)
         self.grid(row=0, column=0, sticky="nsew")
@@ -46,6 +49,9 @@ class CartBotApp(ttk.Frame):
         self._build_body()
         self._build_footer()
         self._rebuild_tabs()
+        # Версия в логе — чтобы по присланному логу сразу было видно, какая
+        # сборка запущена, и не искать причину в уже исправленном.
+        self._append_log(f"Версия программы: {__version__}")
         self._on_market_change()
         self.after(POLL_MS, self._pump_events)
 

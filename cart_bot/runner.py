@@ -150,11 +150,23 @@ class CartRunner:
         # Пазл в капче — картинка. С включённой экономией трафика она не
         # загрузится, и проверка будет вечно крутить спиннер. Снимаем
         # блокировку и перезагружаем страницу, иначе картинку уже не подтянуть.
-        clear_resource_blocking(driver)
+        unblocked = clear_resource_blocking(driver)
         try:
             driver.refresh()
         except WebDriverException as exc:
             log.debug("Не перезагрузил страницу проверки: %s", exc)
+        self.emit(
+            Event(
+                EventKind.LOG,
+                thread_id=thread_id,
+                message=(
+                    f"Поток {thread_id}: снял экономию трафика и перезагрузил "
+                    "страницу, чтобы картинка пазла загрузилась"
+                    if unblocked
+                    else f"Поток {thread_id}: не удалось снять экономию трафика"
+                ),
+            )
+        )
 
         self.emit(
             Event(
