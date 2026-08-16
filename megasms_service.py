@@ -31,12 +31,12 @@ class MegaSMSService:
         self.base_url = "https://megasms.lol/api"
         self.session = requests.Session()
 
-    def get_phone_number(self, service: str = "ozon") -> Optional[str]:
+    def get_phone_number(self, service: str = "ozончик") -> Optional[str]:
         """
         Получить номер телефона для регистрации
 
         Args:
-            service: Сервис (по умолчанию 'ozon')
+            service: Сервис (по умолчанию 'ozончик')
 
         Returns:
             Номер телефона или None при ошибке
@@ -214,7 +214,7 @@ class MegaSMSService:
         except Exception:
             return None
 
-    def get_activation_cost(self, service: str = "ozon") -> Optional[float]:
+    def get_activation_cost(self, service: str = "ozончик") -> Optional[float]:
         """
         Получить стоимость активации
 
@@ -260,7 +260,7 @@ if __name__ == "__main__":
         print("✗ Не удалось получить баланс")
 
     print("\nПолучение номера телефона...")
-    phone_data = sms_service.get_phone_number("ozon")
+    phone_data = sms_service.get_phone_number("ozончик")
     if phone_data:
         print(f"✓ Получен номер: {phone_data['phone']}")
         print(f"  ID активации: {phone_data['activation_id']}")
