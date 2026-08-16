@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import random
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
@@ -83,6 +85,23 @@ class CartResult:
 Emit = Callable[[Event], None]
 
 
+def merge_batches(batches: Sequence[Sequence[str]]) -> List[str]:
+    """Сливает вкладки в один список для работы в единственном браузере.
+
+    Браузер один — значит и корзина одна, раскладывать по потокам нечего.
+    Порядок сохраняем, повторы убираем: один и тот же товар в двух вкладках
+    здесь уже не две корзины, а одна и та же позиция.
+    """
+    merged: List[str] = []
+    seen = set()
+    for batch in batches:
+        for sku in batch:
+            if sku not in seen:
+                seen.add(sku)
+                merged.append(sku)
+    return merged
+
+
 class CartRunner:
     """Собирает N независимых корзин параллельно.
 
@@ -111,6 +130,20 @@ class CartRunner:
             self.emit(Event(EventKind.ALL_DONE, message="Нет SKU для сборки"))
             return []
 
+        if self.cfg.attach_to_chrome and len(active) > 1:
+            merged = merge_batches([skus for _, skus in active])
+            active = [(1, merged)]
+            self.emit(
+                Event(
+                    EventKind.LOG,
+                    message=(
+                        f"Работаю в вашем браузере: он один, поэтому все "
+                        f"{len(merged)} SKU идут в одну корзину, потоки не "
+                        "используются."
+                    ),
+                )
+            )
+
         # Больше воркеров, чем непустых потоков, поднимать незачем.
         workers = min(self.cfg.max_workers, len(active))
         self.emit(
@@ -136,6 +169,19 @@ class CartRunner:
         carts.sort(key=lambda c: c.thread_id)
         self.emit(Event(EventKind.ALL_DONE, message="Сборка завершена"))
         return carts
+
+    def _pace(self) -> None:
+        """Пауза вразнобой между товарами в человеческом темпе.
+
+        Ровный интервал сам по себе выглядит машинно, поэтому берём случайную
+        длительность из диапазона. Отмену не блокируем: спим короткими шагами.
+        """
+        if not self.cfg.human_pace:
+            return
+        delay = random.uniform(self.cfg.pace_min, self.cfg.pace_max)
+        deadline = time.monotonic() + delay
+        while time.monotonic() < deadline and not self._cancel.is_set():
+            time.sleep(min(0.2, deadline - time.monotonic()))
 
     def _survive_block(self, driver, thread_id: int) -> bool:
         """Даёт человеку пройти капчу в окне потока. True — проверка снята.
@@ -198,8 +244,6 @@ class CartRunner:
         return passed
 
     def _run_thread(self, thread_id: int, skus: List[str]) -> CartResult:
-        import time
-
         started = time.monotonic()
         profile = self.cfg.profile_for(thread_id)
         cart = CartResult(
@@ -251,6 +295,8 @@ class CartRunner:
                     cart.error = f"{self.cfg.market.title} заблокировал сессию потока"
                     break
 
+                self._pace()
+
             if not self._cancel.is_set():
                 share, cart.items_in_cart = read_cart_summary(driver, self.cfg)
                 cart.apply_share(share)
@@ -274,7 +320,8 @@ class CartRunner:
             cart.error = str(exc).splitlines()[0]
             log.exception("Поток %s: ошибка", thread_id)
         finally:
-            quit_driver(driver)
+            # Чужой браузер не закрываем — у пользователя схлопнутся вкладки.
+            quit_driver(driver, owned=not self.cfg.attach_to_chrome)
 
         cart.elapsed = round(time.monotonic() - started, 2)
         self.emit(Event(EventKind.THREAD_DONE, thread_id=thread_id, cart=cart))

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import socket
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -74,6 +75,9 @@ class CartBotApp(ttk.Frame):
         self.retries_var = tk.IntVar(value=1)
         self.share_var = tk.BooleanVar(value=True)
         self.captcha_var = tk.DoubleVar(value=120.0)
+        self.attach_var = tk.BooleanVar(value=False)
+        self.address_var = tk.StringVar(value="127.0.0.1:9222")
+        self.pace_var = tk.BooleanVar(value=False)
 
         # Маркетплейс выбирается на весь запуск: все потоки идут в один магазин.
         market_row = ttk.Frame(box)
@@ -152,6 +156,50 @@ class CartBotApp(ttk.Frame):
         ttk.Checkbutton(
             box, text="Ссылка «Поделиться»", variable=self.share_var
         ).grid(row=1, column=12)
+
+        # Режим работы в браузере пользователя — отдельной строкой, потому что
+        # он отменяет и потоки, и headless, и экономию трафика.
+        attach_row = ttk.Frame(box)
+        attach_row.grid(row=2, column=0, columnspan=20, sticky="w", pady=(8, 0))
+        ttk.Checkbutton(
+            attach_row,
+            text="Работать в моём Chrome",
+            variable=self.attach_var,
+            command=self._on_attach_change,
+        ).pack(side="left", padx=(0, 6))
+        ttk.Entry(attach_row, textvariable=self.address_var, width=18).pack(
+            side="left", padx=(0, 6)
+        )
+        ttk.Button(
+            attach_row, text="Как запустить?", command=self._explain_attach
+        ).pack(side="left", padx=(0, 16))
+        ttk.Checkbutton(
+            attach_row, text="Человеческий темп (1.5–4 с)", variable=self.pace_var
+        ).pack(side="left")
+
+    def _on_attach_change(self) -> None:
+        if self.attach_var.get():
+            self._append_log(
+                "Режим «мой Chrome»: браузер один, поэтому все SKU пойдут в "
+                "одну корзину, а галки Headless и «Без картинок» не действуют."
+            )
+        else:
+            self._append_log("Вернулся к собственным профилям браузера.")
+
+    def _explain_attach(self) -> None:
+        messagebox.showinfo(
+            "Как работать в своём Chrome",
+            "1. Закройте все окна Chrome.\n\n"
+            "2. Запустите «Chrome с отладкой.bat» из этой же папки. Откроется "
+            "обычный Chrome, но с открытым портом для управления.\n\n"
+            "3. Войдите в нём в Озон и немного полистайте сайт — этот профиль "
+            "сохраняется, и чем он обжитее, тем меньше к нему вопросов.\n\n"
+            "4. Не закрывая браузер, нажмите «Собрать корзины».\n\n"
+            "Программа будет работать в этом окне: открывать товары и жать "
+            "«В корзину». Браузер она не закроет — закроете сами.\n\n"
+            "Chrome 136 и новее не даёт управлять основным профилем, поэтому "
+            "используется отдельный профиль в папке OzonCartChrome.",
+        )
 
     def _on_market_change(self) -> None:
         """Смена маркетплейса: подсказка по формату ссылок и сброс результатов.
@@ -343,6 +391,12 @@ class CartBotApp(ttk.Frame):
         cfg.max_workers = max(1, int(self.workers_var.get()))
         cfg.fetch_share_link = bool(self.share_var.get())
         cfg.captcha_wait = float(self.captcha_var.get())
+        cfg.attach_to_chrome = bool(self.attach_var.get())
+        cfg.debug_address = self.address_var.get().strip() or "127.0.0.1:9222"
+        cfg.human_pace = bool(self.pace_var.get())
+        if cfg.attach_to_chrome:
+            # Браузер один — параллелить нечего.
+            cfg.max_workers = 1
         return cfg
 
     def _start(self) -> None:
@@ -364,6 +418,8 @@ class CartBotApp(ttk.Frame):
                 return
 
         self.cfg = self._read_settings()
+        if self.cfg.attach_to_chrome and not self._chrome_is_listening():
+            return
         ensure_app_dir()
         self.carts.clear()
         self._reset_tree(batches)
@@ -373,7 +429,11 @@ class CartBotApp(ttk.Frame):
         self.cancel_btn.config(state="normal")
         self.status_label.config(text="Собираю…")
         self._append_log(f"Старт: {total} SKU в {len([b for b in batches if b])} поток(ах).")
-        if self.cfg.headless and self.cfg.captcha_wait > 0:
+        if (
+            self.cfg.headless
+            and self.cfg.captcha_wait > 0
+            and not self.cfg.attach_to_chrome
+        ):
             self._append_log(
                 "Внимание: включён Headless — окон нет, и пройти капчу вручную "
                 "будет невозможно. Если магазин показывает проверку, снимите "
@@ -383,6 +443,26 @@ class CartBotApp(ttk.Frame):
         self.runner = CartRunner(self.cfg, batches, self.events.put)
         self.run_thread = threading.Thread(target=self.runner.run, daemon=True)
         self.run_thread.start()
+
+    def _chrome_is_listening(self) -> bool:
+        """Проверяет, запущен ли Chrome с открытым портом отладки.
+
+        Без этой проверки пользователь получил бы длинную ошибку Selenium
+        вместо понятного «браузер не запущен».
+        """
+        host, _, port = self.cfg.debug_address.partition(":")
+        try:
+            with socket.create_connection((host or "127.0.0.1", int(port or 9222)), 1.5):
+                return True
+        except (OSError, ValueError):
+            messagebox.showerror(
+                "Chrome не найден",
+                f"По адресу {self.cfg.debug_address} никто не отвечает.\n\n"
+                "Запустите «Chrome с отладкой.bat» и не закрывайте окно "
+                "браузера, затем повторите.\n\n"
+                "Подробности — кнопка «Как запустить?».",
+            )
+            return False
 
     def _cancel(self) -> None:
         if self.runner:

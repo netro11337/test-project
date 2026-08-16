@@ -75,12 +75,38 @@ def _resolve_service() -> Optional[Service]:
         return None
 
 
+def attach_driver(cfg: Settings) -> webdriver.Chrome:
+    """Подключается к уже запущенному Chrome пользователя.
+
+    Ничего не маскируем: это тот самый браузер, которым человек пользуется
+    каждый день, со своим профилем, аккаунтом и историей. Свои настройки
+    (headless, профиль, экономия трафика) здесь не применяются — браузер уже
+    запущен, и распоряжаться им как своим нельзя.
+    """
+    options = Options()
+    options.debugger_address = cfg.debug_address
+    options.page_load_strategy = "eager"
+
+    service = _resolve_service()
+    driver = (
+        webdriver.Chrome(service=service, options=options)
+        if service is not None
+        else webdriver.Chrome(options=options)
+    )
+    driver.set_page_load_timeout(cfg.page_load_timeout)
+    driver.set_script_timeout(cfg.page_load_timeout)
+    return driver
+
+
 def create_driver(
     cfg: Settings,
     profile_dir: Path,
     headless: Optional[bool] = None,
 ) -> webdriver.Chrome:
     """Поднимает Chrome с отключённой графикой и короткими таймаутами."""
+    if cfg.attach_to_chrome:
+        return attach_driver(cfg)
+
     use_headless = cfg.headless if headless is None else headless
     options = _build_options(cfg, profile_dir, use_headless)
 
@@ -112,7 +138,13 @@ def _patterns_for(cfg: Settings) -> list:
 
 
 def apply_resource_blocking(driver: webdriver.Chrome, cfg: Settings) -> None:
-    """Включает экономию трафика: картинки, шрифты, аналитика."""
+    """Включает экономию трафика: картинки, шрифты, аналитика.
+
+    В чужом браузере не трогаем ничего: человек продолжит им пользоваться, и
+    оставлять ему сайты без картинок нельзя.
+    """
+    if cfg.attach_to_chrome:
+        return
     patterns = _patterns_for(cfg)
     if not patterns:
         return
@@ -138,9 +170,13 @@ def clear_resource_blocking(driver: webdriver.Chrome) -> bool:
         return False
 
 
-def quit_driver(driver: Optional[webdriver.Chrome]) -> None:
-    """Закрывает драйвер, не роняя вызывающий код."""
-    if driver is None:
+def quit_driver(driver: Optional[webdriver.Chrome], owned: bool = True) -> None:
+    """Закрывает драйвер, не роняя вызывающий код.
+
+    owned=False — браузер не наш, мы к нему подключились. Закрывать его нельзя:
+    у пользователя схлопнутся все вкладки.
+    """
+    if driver is None or not owned:
         return
     try:
         driver.quit()
