@@ -247,13 +247,20 @@ def find_share_button(
     """
     deadline = time.monotonic() + cfg.element_timeout
     while True:
+        header = header_buttons(driver, market)
         for xpath in market.share_buttons:
             try:
                 candidates = _visible(driver.find_elements(By.XPATH, xpath))
             except WebDriverException:
                 continue
-            if candidates:
-                return candidates[0], xpath, len(candidates)
+            if not candidates:
+                continue
+            # У каждого товара свои иконки «поделиться». Нужна та, что в шапке
+            # группы: она делится всей корзиной, а не одной позицией.
+            in_header = [button for button in candidates if button in header]
+            if in_header:
+                return in_header[0], f"{xpath} (шапка)", len(candidates)
+            return candidates[0], xpath, len(candidates)
         if time.monotonic() >= deadline:
             return None, "", 0
         time.sleep(0.15)
@@ -431,10 +438,63 @@ return null;
 """
 
 
+# Кнопки шапки корзины: поднимаемся от чекбокса «Все» до первого предка, в
+# котором есть хотя бы две кнопки. Именно там лежат «сердце», «удалить» и
+# «поделиться», действующие на всю группу.
+_HEADER_JS = """
+let node = arguments[0];
+for (let depth = 0; depth < 8 && node.parentElement; depth++) {
+  node = node.parentElement;
+  const buttons = Array.from(node.querySelectorAll('button'))
+    .filter(b => b.offsetParent !== null);
+  if (buttons.length >= 2) return buttons;
+}
+return [];
+"""
+
+
+def header_buttons(driver: WebDriver, market: Market) -> List[WebElement]:
+    """Кнопки строки «Выбрать все» — те, что действуют на всю корзину.
+
+    У каждого товара свои такие же иконки, поэтому искать по первой попавшейся
+    нельзя: удалится один товар вместо всей корзины.
+    """
+    for xpath in market.select_all:
+        try:
+            anchors = _visible(driver.find_elements(By.XPATH, xpath))
+        except WebDriverException:
+            continue
+        if not anchors:
+            continue
+        try:
+            buttons = driver.execute_script(_HEADER_JS, anchors[0])
+        except WebDriverException as exc:
+            log.debug("Не нашёл кнопки шапки: %s", exc)
+            continue
+        if buttons:
+            return list(buttons)
+    return []
+
+
+def _share_elements(driver: WebDriver, market: Market) -> List[WebElement]:
+    found: List[WebElement] = []
+    for xpath in market.share_buttons:
+        try:
+            found.extend(driver.find_elements(By.XPATH, xpath))
+        except WebDriverException:
+            continue
+    return found
+
+
 def find_clear_button(
     driver: WebDriver, cfg: Settings, market: Market
 ) -> Tuple[Optional[WebElement], str]:
-    """Ищет кнопку удаления: сначала по подписи, потом по соседству."""
+    """Ищет кнопку удаления всей корзины.
+
+    Порядок: подпись → шапка группы → сосед «Поделиться». Шапка важнее
+    соседства: у каждого товара свои иконки, и соседство без привязки к
+    шапке удаляет один товар.
+    """
     for xpath in market.cart_clear_buttons:
         try:
             candidates = _visible(driver.find_elements(By.XPATH, xpath))
@@ -442,6 +502,24 @@ def find_clear_button(
             continue
         if candidates:
             return candidates[0], xpath
+
+    buttons = header_buttons(driver, market)
+    if buttons:
+        shares = _share_elements(driver, market)
+        index = next(
+            (i for i, button in enumerate(buttons) if button in shares), None
+        )
+        if index is not None:
+            step = -1 if market.clear_side == "left" else 1
+            target = index + step
+            if 0 <= target < len(buttons):
+                return buttons[target], f"шапка корзины, {market.clear_side} от «Поделиться»"
+        # «Поделиться» в шапке не опознали — берём по месту: на WB иконки идут
+        # «сердце, удалить, поделиться», на Ozon — «поделиться, удалить».
+        if market.clear_side == "left" and len(buttons) >= 2:
+            return buttons[-2], "шапка корзины, предпоследняя кнопка"
+        if market.clear_side == "right" and buttons:
+            return buttons[-1], "шапка корзины, последняя кнопка"
 
     share, _, _ = find_share_button(driver, cfg, market)
     if share is None:
