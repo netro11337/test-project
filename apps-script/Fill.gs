@@ -10,31 +10,68 @@
  * строки с подсказками («Редактируемое обязательное», «Укажите артикул…»),
  * а данные начинаются с первой пустой строки. Скрипт находит эту границу
  * сам и служебные строки не трогает.
+ *
+ * Магазинов может быть несколько: тогда за один запуск получается по файлу
+ * на каждый кабинет — см. CONFIG.SHOPS.
  */
 function fillOzonTemplate() {
-  var source = readSourceStocks_();
-  var templateFolder = folderById_(CONFIG.TEMPLATE_FOLDER_ID, 'шаблон из ЛК');
-  var outFolder = folderById_(CONFIG.OUTPUT_FOLDER_ID, 'готовые файлы');
+  var shops = shopsList_();
+  assertDistinctTemplates_(shops);
+
+  var results = [];
+  var errors = [];
+
+  for (var i = 0; i < shops.length; i++) {
+    try {
+      var r = fillOneShop_(shops[i]);
+      results.push(r);
+      logRun_(r);
+    } catch (e) {
+      // Один магазин не должен ронять остальные
+      var where = shops[i].name ? shops[i].name + ': ' : '';
+      errors.push(where + e.message);
+      logRun_({
+        shop: shops[i].name,
+        mode: 'Ошибка',
+        problems: [e.message]
+      });
+    }
+  }
+
+  mailResults_(results, errors);
+  tell_(results.length ? 'Готово' : 'Не получилось', report_(results, errors));
+
+  if (!results.length) {
+    throw new Error(errors.join('\n'));   // чтобы автозапуск увидел сбой
+  }
+  return results;
+}
+
+/** Готовит файл для одного магазина. */
+function fillOneShop_(shop) {
+  var source = readSourceStocks_(shop.sheet);
+  var templateFolder = folderById_(shop.templateFolderId,
+    'шаблон' + (shop.name ? ' магазина ' + shop.name : ' из ЛК'));
+  var outFolder = folderById_(shop.outputFolderId, 'готовые файлы');
 
   var templateFile = latestTemplateFile_(templateFolder);
   var tmpId = convertToSheet_(templateFile, 'tmp-ozon-' + stamp_());
 
-  var result;
   try {
-    result = applyStocks_(tmpId, source);
-    var fileName = 'ozon-ostatki-' + stamp_() + '.xlsx';
+    var result = applyStocks_(tmpId, source, shop);
+    var fileName = 'ozon-ostatki-' +
+      (shop.name ? slug_(shop.name) + '-' : '') + stamp_() + '.xlsx';
     var out = exportXlsx_(tmpId, fileName, outFolder);
+
+    result.shop = shop.name;
+    result.mode = 'Шаблон из ЛК';
     result.fileName = fileName;
     result.fileUrl = out.getUrl();
-    result.mode = 'Шаблон из ЛК';
-    logRun_(result);
-    mailResult_(out, result);
+    result.file = out;
+    return result;
   } finally {
     trashQuietly_(tmpId);
   }
-
-  tell_('Файл готов', report_(result));
-  return result;
 }
 
 /** Самый свежий .xls/.xlsx в папке с шаблонами. */
@@ -61,7 +98,7 @@ function latestTemplateFile_(folder) {
  * из таблицы дописывается ниже.
  * @return {Object} статистика для отчёта.
  */
-function applyStocks_(spreadsheetId, source) {
+function applyStocks_(spreadsheetId, source, shop) {
   var ss = SpreadsheetApp.openById(spreadsheetId);
   var sheets = ss.getSheets();
   var loc = null;
@@ -79,7 +116,7 @@ function applyStocks_(spreadsheetId, source) {
   var sheet = loc.sheet;
   var lastCol = sheet.getLastColumn();
   var dataStart = findDataStart_(sheet, loc);
-  var warehouse = resolveWarehouse_(sheet, loc, dataStart);
+  var warehouse = resolveWarehouse_(sheet, loc, dataStart, shop);
   var problems = source.problems.slice();
 
   // Уже заполненные строки шаблона (в пустом шаблоне их нет)
@@ -146,7 +183,6 @@ function applyStocks_(spreadsheetId, source) {
     added: added,
     zeroed: zeroed,
     untouched: untouched,
-    notInTemplate: 0,
     warehouse: warehouse,
     sheetName: sheet.getName(),
     problems: problems
@@ -224,27 +260,56 @@ function isServiceRow_(row) {
  * Определяет название склада: из настроек либо из выпадающего списка,
  * который Ozon кладёт в колонку склада.
  */
-function resolveWarehouse_(sheet, loc, dataStart) {
+function resolveWarehouse_(sheet, loc, dataStart, shop) {
   if (loc.warehouseCol === -1) return '';
 
+  var wanted = (shop && shop.warehouse) || CONFIG.WAREHOUSE_NAME || '';
+  var where = shop && shop.name ? ' (магазин ' + shop.name + ')' : '';
   var options = warehouseOptions_(sheet, loc, dataStart);
 
-  if (CONFIG.WAREHOUSE_NAME) {
-    if (options.length && options.indexOf(CONFIG.WAREHOUSE_NAME) === -1) {
-      throw new Error('Склад «' + CONFIG.WAREHOUSE_NAME +
-        '» не найден в шаблоне. Доступные варианты: ' + options.join(' | ') +
-        '. Скопируйте название точь-в-точь в CONFIG.WAREHOUSE_NAME.');
+  if (wanted) {
+    if (!options.length) return wanted;         // списка нет — верим настройке
+    var picked = matchWarehouse_(wanted, options);
+    if (picked.length === 1) return picked[0];
+    if (picked.length > 1) {
+      throw new Error('Под «' + wanted + '» подходит несколько складов' + where +
+        ': ' + picked.join(' | ') + '. Уточните название.');
     }
-    return CONFIG.WAREHOUSE_NAME;
+    throw new Error('Склад «' + wanted + '» не найден в шаблоне' + where +
+      '. Доступные варианты: ' + options.join(' | '));
   }
 
   if (options.length === 1) return options[0];
   if (options.length > 1) {
-    throw new Error('В шаблоне несколько складов: ' + options.join(' | ') +
-      '. Впишите нужный в CONFIG.WAREHOUSE_NAME.');
+    throw new Error('В шаблоне несколько складов' + where + ': ' +
+      options.join(' | ') + '. Укажите нужный в настройках.');
   }
-  throw new Error('Не удалось определить склад: в шаблоне нет выпадающего списка. ' +
-    'Впишите название склада в CONFIG.WAREHOUSE_NAME ровно как в личном кабинете.');
+  throw new Error('Не удалось определить склад' + where +
+    ': в шаблоне нет выпадающего списка. Впишите название склада в настройки ' +
+    'ровно как в личном кабинете.');
+}
+
+/**
+ * Подбирает склад по неполному названию. В шаблоне склад записан как
+ * «Название (идентификатор)», поэтому цифры знать не нужно — достаточно
+ * названия или его узнаваемой части.
+ */
+function matchWarehouse_(wanted, options) {
+  var w = normHeader_(wanted);
+  var i, hits = [];
+
+  for (i = 0; i < options.length; i++) {
+    if (normHeader_(options[i]) === w) return [options[i]];
+  }
+  for (i = 0; i < options.length; i++) {
+    if (normHeader_(options[i]).indexOf(w) === 0) hits.push(options[i]);
+  }
+  if (hits.length) return hits;
+
+  for (i = 0; i < options.length; i++) {
+    if (normHeader_(options[i]).indexOf(w) !== -1) hits.push(options[i]);
+  }
+  return hits;
 }
 
 /** Значения выпадающего списка складов, если он есть в шаблоне. */
@@ -278,21 +343,32 @@ function warehouseOptions_(sheet, loc, dataStart) {
 }
 
 /** Текст отчёта для всплывающего окна. */
-function report_(result) {
-  var lines = [
-    'Файл: ' + result.fileName,
-    '',
-    'Строк с остатками в файле: ' + result.updated
-  ];
-  if (result.added) lines.push('Из них дописано в пустой шаблон: ' + result.added);
-  if (result.zeroed) lines.push('Обнулено (нет в таблице): ' + result.zeroed);
-  if (result.untouched) lines.push('Оставлено без изменений: ' + result.untouched);
-  if (result.warehouse) lines.push('Склад: ' + result.warehouse);
-  if (result.problems && result.problems.length) {
-    lines.push('', 'Замечания:', result.problems.slice(0, 10).join('\n'));
+function report_(results, errors) {
+  var lines = [];
+
+  for (var i = 0; i < results.length; i++) {
+    var r = results[i];
+    if (r.shop) lines.push('— ' + r.shop + ' —');
+    lines.push('Файл: ' + r.fileName);
+    lines.push('Строк с остатками: ' + r.updated);
+    if (r.added && r.added !== r.updated) lines.push('Дописано: ' + r.added);
+    if (r.zeroed) lines.push('Обнулено (нет в таблице): ' + r.zeroed);
+    if (r.untouched) lines.push('Оставлено без изменений: ' + r.untouched);
+    if (r.warehouse) lines.push('Склад: ' + r.warehouse);
+    if (r.problems && r.problems.length) {
+      lines.push('Замечания:', r.problems.slice(0, 10).join('\n'));
+    }
+    lines.push('');
   }
-  lines.push('', 'Файл лежит в папке готовых файлов на Google Диске.',
-    'Загрузите его в ЛК: Управление логистикой → склад →',
-    'Управление остатками → загрузить файл → «Обновить остатки».');
+
+  if (errors && errors.length) {
+    lines.push('НЕ ПОЛУЧИЛОСЬ:', errors.join('\n'), '');
+  }
+
+  if (results.length) {
+    lines.push('Файлы лежат в папке готовых файлов на Google Диске.',
+      'Загрузите каждый в свой кабинет: Управление логистикой → склад →',
+      'Управление остатками → загрузить файл → «Обновить остатки».');
+  }
   return lines.join('\n');
 }

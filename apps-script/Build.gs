@@ -9,17 +9,44 @@
  * из выпадающего списка самого шаблона.
  */
 function buildStockFile() {
-  var source = readSourceStocks_();
-  var outFolder = folderById_(CONFIG.OUTPUT_FOLDER_ID, 'готовые файлы');
+  var shops = shopsList_();
+  var results = [];
+  var errors = [];
 
-  if (!CONFIG.WAREHOUSE_NAME) {
-    throw new Error('Для сборки файла с нуля нужно указать CONFIG.WAREHOUSE_NAME — ' +
-      'название склада ровно как в личном кабинете Ozon.');
+  for (var i = 0; i < shops.length; i++) {
+    try {
+      var r = buildOneShop_(shops[i]);
+      results.push(r);
+      logRun_(r);
+    } catch (e) {
+      var where = shops[i].name ? shops[i].name + ': ' : '';
+      errors.push(where + e.message);
+      logRun_({ shop: shops[i].name, mode: 'Ошибка', problems: [e.message] });
+    }
+  }
+
+  mailResults_(results, errors);
+  tell_(results.length ? 'Готово' : 'Не получилось', report_(results, errors));
+
+  if (!results.length) {
+    throw new Error(errors.join('\n'));
+  }
+  return results;
+}
+
+/** Собирает файл с нуля для одного магазина. */
+function buildOneShop_(shop) {
+  var source = readSourceStocks_(shop.sheet);
+  var outFolder = folderById_(shop.outputFolderId, 'готовые файлы');
+  var warehouse = shop.warehouse || CONFIG.WAREHOUSE_NAME;
+
+  if (!warehouse) {
+    throw new Error('Для сборки файла с нуля нужно название склада ровно ' +
+      'как в личном кабинете Ozon — укажите его в настройках.');
   }
 
   var tmp = SpreadsheetApp.create('tmp-ozon-build-' + stamp_());
   var tmpId = tmp.getId();
-  var result;
 
   try {
     var sheet = tmp.getSheets()[0];
@@ -33,7 +60,7 @@ function buildStockFile() {
     ]];
     for (var i = 0; i < source.rows.length; i++) {
       rows.push([
-        CONFIG.WAREHOUSE_NAME,
+        warehouse,
         source.rows[i].raw,
         source.rows[i].name || '',
         source.rows[i].qty
@@ -45,25 +72,23 @@ function buildStockFile() {
     sheet.getRange(2, 2, source.rows.length, 1).setNumberFormat('@');
     SpreadsheetApp.flush();
 
-    var fileName = 'ozon-ostatki-' + stamp_() + '.xlsx';
+    var fileName = 'ozon-ostatki-' +
+      (shop.name ? slug_(shop.name) + '-' : '') + stamp_() + '.xlsx';
     var out = exportXlsx_(tmpId, fileName, outFolder);
 
-    result = {
+    return {
+      shop: shop.name,
       mode: 'Файл с нуля',
       updated: source.rows.length,
       added: source.rows.length,
       zeroed: 0,
-      warehouse: CONFIG.WAREHOUSE_NAME,
+      warehouse: warehouse,
       problems: source.problems,
       fileName: fileName,
-      fileUrl: out.getUrl()
+      fileUrl: out.getUrl(),
+      file: out
     };
-    logRun_(result);
-    mailResult_(out, result);
   } finally {
     trashQuietly_(tmpId);
   }
-
-  tell_('Файл готов', report_(result));
-  return result;
 }

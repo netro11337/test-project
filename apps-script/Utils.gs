@@ -72,14 +72,16 @@ function parseQty_(v) {
 
 /**
  * Читает лист с остатками.
+ * @param {string=} sheetName лист; по умолчанию CONFIG.SOURCE_SHEET.
  * @return {{map: Object, rows: Array, problems: Array}}
  */
-function readSourceStocks_() {
+function readSourceStocks_(sheetName) {
+  var name = sheetName || CONFIG.SOURCE_SHEET;
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sh = ss.getSheetByName(CONFIG.SOURCE_SHEET);
+  var sh = ss.getSheetByName(name);
   if (!sh) {
-    throw new Error('Не найден лист «' + CONFIG.SOURCE_SHEET +
-      '». Проверьте CONFIG.SOURCE_SHEET в файле Config.gs.');
+    throw new Error('Не найден лист «' + name +
+      '». Проверьте название листа в настройках (Config.gs).');
   }
 
   var values = sh.getDataRange().getValues();
@@ -93,7 +95,7 @@ function readSourceStocks_() {
     if (s !== -1 && q !== -1) { headerRow = r; skuCol = s; qtyCol = q; break; }
   }
   if (headerRow === -1) {
-    throw new Error('На листе «' + CONFIG.SOURCE_SHEET + '» не найдены колонки «' +
+    throw new Error('На листе «' + name + '» не найдены колонки «' +
       CONFIG.SKU_HEADER + '» и «' + CONFIG.QTY_HEADER +
       '». Заголовки должны быть в одной из первых 10 строк.');
   }
@@ -139,7 +141,7 @@ function readSourceStocks_() {
   }
 
   if (!rows.length) {
-    throw new Error('На листе «' + CONFIG.SOURCE_SHEET + '» нет ни одной строки с данными.');
+    throw new Error('На листе «' + name + '» нет ни одной строки с данными.');
   }
   return { map: map, rows: rows, problems: problems };
 }
@@ -212,12 +214,13 @@ function logRun_(result) {
   var sh = ss.getSheetByName(LOG_SHEET);
   if (!sh) {
     sh = ss.insertSheet(LOG_SHEET);
-    sh.appendRow(['Дата', 'Режим', 'Файл', 'Строк в файле',
+    sh.appendRow(['Дата', 'Магазин', 'Режим', 'Файл', 'Строк в файле',
       'Дописано', 'Обнулено', 'Склад', 'Замечания']);
     sh.setFrozenRows(1);
   }
   sh.appendRow([
     new Date(),
+    result.shop || '',
     result.mode,
     result.fileUrl ? '=HYPERLINK("' + result.fileUrl + '";"' + result.fileName + '")' : '',
     result.updated || 0,
@@ -237,25 +240,94 @@ function tell_(title, message) {
   }
 }
 
-/** Отправляет готовый файл на почту, если указан адрес. */
-function mailResult_(file, result) {
+/** Превращает название магазина в кусок имени файла. */
+function slug_(name) {
+  return String(name || '').trim()
+    .replace(/[^0-9A-Za-zА-Яа-яЁё_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+}
+
+/** Отправляет готовые файлы на почту одним письмом, если указан адрес. */
+function mailResults_(results, errors) {
   if (!CONFIG.EMAIL_TO) return;
-  var lines = [
-    'Файл остатков для загрузки в Ozon Seller готов.',
-    '',
-    'Строк с остатками: ' + (result.updated || 0),
-    'Обнулено: ' + (result.zeroed || 0),
-    'Склад: ' + (result.warehouse || '—'),
-    '',
-    'Ссылка: ' + file.getUrl()
-  ];
-  if (result.problems && result.problems.length) {
-    lines.push('', 'Замечания:', result.problems.join('\n'));
+
+  var lines = ['Файлы остатков для загрузки в Ozon Seller готовы.', ''];
+  var attachments = [];
+
+  for (var i = 0; i < results.length; i++) {
+    var r = results[i];
+    lines.push((r.shop ? r.shop + ' — ' : '') + r.fileName);
+    lines.push('  строк: ' + (r.updated || 0) + ', склад: ' + (r.warehouse || '—'));
+    if (r.problems && r.problems.length) {
+      lines.push('  замечания: ' + r.problems.join('; '));
+    }
+    lines.push('  ' + r.fileUrl, '');
+    if (r.file) attachments.push(r.file.getBlob());
   }
+
+  if (errors && errors.length) {
+    lines.push('НЕ УДАЛОСЬ:', errors.join('\n'));
+  }
+
   MailApp.sendEmail({
     to: CONFIG.EMAIL_TO,
-    subject: 'Остатки Ozon FBS — ' + file.getName(),
+    subject: 'Остатки Ozon FBS — ' + results.length + ' файл(ов)' +
+      (errors && errors.length ? ', есть ошибки' : ''),
     body: lines.join('\n'),
-    attachments: [file.getBlob()]
+    attachments: attachments
   });
+}
+
+/**
+ * Список магазинов. Если CONFIG.SHOPS пуст — один магазин из общих настроек.
+ */
+function shopsList_() {
+  var raw = CONFIG.SHOPS || [];
+  var list = [];
+
+  for (var i = 0; i < raw.length; i++) {
+    if (!raw[i] || !raw[i].sheet) continue;
+    list.push({
+      name: raw[i].name || raw[i].sheet,
+      sheet: raw[i].sheet,
+      templateFolderId: raw[i].templateFolderId || CONFIG.TEMPLATE_FOLDER_ID,
+      outputFolderId: raw[i].outputFolderId || CONFIG.OUTPUT_FOLDER_ID,
+      warehouse: raw[i].warehouse || ''
+    });
+  }
+
+  if (!list.length) {
+    list.push({
+      name: '',
+      sheet: CONFIG.SOURCE_SHEET,
+      templateFolderId: CONFIG.TEMPLATE_FOLDER_ID,
+      outputFolderId: CONFIG.OUTPUT_FOLDER_ID,
+      warehouse: CONFIG.WAREHOUSE_NAME
+    });
+  }
+  return list;
+}
+
+/**
+ * У каждого кабинета свой шаблон со своим списком складов. Общая папка на
+ * несколько магазинов означала бы, что все файлы уедут на склад первого,
+ * — это молча испортило бы остатки, поэтому останавливаемся сразу.
+ */
+function assertDistinctTemplates_(shops) {
+  if (shops.length < 2) return;
+  var seen = {};
+  for (var i = 0; i < shops.length; i++) {
+    var id = shops[i].templateFolderId;
+    if (!id) {
+      throw new Error('У магазина «' + shops[i].name +
+        '» не указана папка с шаблоном (templateFolderId).');
+    }
+    if (seen[id]) {
+      throw new Error('Магазины «' + seen[id] + '» и «' + shops[i].name +
+        '» указывают на одну папку с шаблоном. У каждого кабинета должен быть ' +
+        'свой шаблон — иначе остатки уедут не на тот склад.');
+    }
+    seen[id] = shops[i].name;
+  }
 }

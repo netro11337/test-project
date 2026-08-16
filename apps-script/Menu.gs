@@ -7,33 +7,42 @@ function onOpen() {
     .createMenu('Ozon')
     .addItem('Проверить данные', 'checkSource')
     .addSeparator()
-    .addItem('Заполнить шаблон из ЛК', 'fillOzonTemplate')
-    .addItem('Собрать файл с нуля', 'buildStockFile')
+    .addItem('Заполнить шаблон(ы) из ЛК', 'fillOzonTemplate')
+    .addItem('Собрать файл(ы) с нуля', 'buildStockFile')
     .addSeparator()
     .addItem('Включить ежедневный запуск', 'setupDailyTrigger')
     .addItem('Выключить ежедневный запуск', 'removeDailyTrigger')
     .addToUi();
 }
 
-/** Быстрая проверка листа с остатками — без создания файлов. */
+/** Быстрая проверка листов с остатками — без создания файлов. */
 function checkSource() {
-  var source = readSourceStocks_();
-  var total = 0, zeros = 0;
-  for (var i = 0; i < source.rows.length; i++) {
-    total += source.rows[i].qty;
-    if (source.rows[i].qty === 0) zeros++;
-  }
+  var shops = shopsList_();
+  var lines = [];
 
-  var lines = [
-    'Строк с товарами: ' + source.rows.length,
-    'Из них с нулевым остатком: ' + zeros,
-    'Суммарное количество: ' + total
-  ];
-  if (source.problems.length) {
-    lines.push('', 'Замечания (' + source.problems.length + '):',
-      source.problems.slice(0, 15).join('\n'));
-  } else {
-    lines.push('', 'Ошибок в данных не найдено.');
+  for (var s = 0; s < shops.length; s++) {
+    if (shops[s].name) lines.push('— ' + shops[s].name + ' (лист «' + shops[s].sheet + '») —');
+
+    try {
+      var source = readSourceStocks_(shops[s].sheet);
+      var total = 0, zeros = 0;
+      for (var i = 0; i < source.rows.length; i++) {
+        total += source.rows[i].qty;
+        if (source.rows[i].qty === 0) zeros++;
+      }
+      lines.push('Строк с товарами: ' + source.rows.length);
+      lines.push('Из них с нулевым остатком: ' + zeros);
+      lines.push('Суммарное количество: ' + total);
+      if (source.problems.length) {
+        lines.push('Замечания (' + source.problems.length + '):',
+          source.problems.slice(0, 15).join('\n'));
+      } else {
+        lines.push('Ошибок в данных не найдено.');
+      }
+    } catch (e) {
+      lines.push('ОШИБКА: ' + e.message);
+    }
+    lines.push('');
   }
   tell_('Проверка данных', lines.join('\n'));
 }
@@ -55,7 +64,7 @@ function dailyRun() {
       MailApp.sendEmail(CONFIG.EMAIL_TO,
         'Остатки Ozon: автозапуск не сработал',
         'Ошибка: ' + e.message +
-        '\n\nОткройте таблицу и запустите «Ozon → Заполнить шаблон из ЛК» вручную.');
+        '\n\nОткройте таблицу и запустите «Ozon → Заполнить шаблон(ы) из ЛК» вручную.');
     }
     throw e;
   }
