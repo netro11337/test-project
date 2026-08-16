@@ -32,6 +32,11 @@ class Market:
     share_buttons: Tuple[str, ...]  # XPath-кандидаты, по порядку надёжности
     select_all: Tuple[str, ...] = ()  # XPath: чекбокс «Все», если он есть
 
+    # Заголовок вкладки при блокировке. Признак надёжнее текста на странице:
+    # текст магазин переписывает, а служебная страница называется одинаково.
+    # Сравнение идёт в нижнем регистре по вхождению.
+    antibot_titles: Tuple[str, ...] = ("antibot", "captcha", "доступ ограничен")
+
 
 OZON = Market(
     key="ozon",
@@ -60,7 +65,11 @@ OZON = Market(
     antibot=(
         "//*[contains(text(), 'Доступ ограничен')"
         " or contains(text(), 'Подтвердите, что вы не робот')"
-        " or contains(text(), 'Вы не робот')]"
+        " or contains(text(), 'Вы не робот')"
+        # Страница антибота Ozon: заголовок вкладки «Antibot Captcha»,
+        # на самой странице только это сообщение и кнопка «Обновить».
+        " or contains(text(), 'Ой, что-то пошло не так')"
+        " or contains(text(), 'Обновите страницу')]"
     ),
     cart_ready="div[data-widget='split'], div[data-widget='cartEmpty']",
     cart_item="div[data-widget='cartItem']",
@@ -108,7 +117,9 @@ WB = Market(
     antibot=(
         "//*[contains(text(), 'Доступ ограничен')"
         " or contains(text(), 'Подтвердите, что вы не робот')"
-        " or contains(text(), 'Вы не робот')]"
+        " or contains(text(), 'Вы не робот')"
+        " or contains(text(), 'Ой, что-то пошло не так')"
+        " or contains(text(), 'Обновите страницу')]"
     ),
     cart_ready=(
         "div.basket, div.basket-section, div.basket-empty, "

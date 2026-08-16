@@ -56,6 +56,43 @@ def _find_first(driver: WebDriver, xpath: str) -> Optional[WebElement]:
         return None
 
 
+def is_blocked(driver: WebDriver, market: Market) -> bool:
+    """Показывает ли магазин страницу антибота вместо запрошенной.
+
+    Сначала смотрим заголовок вкладки: у служебной страницы Ozon он равен
+    «Antibot Captcha» независимо от того, что написано в теле страницы. Текст
+    магазин переписывает, заголовок — почти никогда.
+    """
+    try:
+        title = (driver.title or "").lower()
+    except WebDriverException:
+        title = ""
+    if any(marker in title for marker in market.antibot_titles):
+        return True
+    return _find_first(driver, market.antibot) is not None
+
+
+def wait_until_unblocked(
+    driver: WebDriver,
+    market: Market,
+    timeout: float,
+    should_stop=None,
+) -> bool:
+    """Ждёт, пока человек не пройдёт проверку в окне браузера.
+
+    Капчу решает пользователь: окно потока для этого открыто. Как только
+    страница перестаёт быть страницей антибота, поток продолжает работу.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if should_stop is not None and should_stop():
+            return False
+        if not is_blocked(driver, market):
+            return True
+        time.sleep(1.0)
+    return not is_blocked(driver, market)
+
+
 def _click(driver: WebDriver, element: WebElement) -> None:
     """Обычный клик, при перехвате — через JS."""
     try:
@@ -98,7 +135,7 @@ def add_sku(driver: WebDriver, sku: str, cfg: Settings) -> SkuResult:
     except WebDriverException as exc:
         return SkuResult(sku, Outcome.ERROR, str(exc).splitlines()[0], _since(started))
 
-    if _find_first(driver, market.antibot) is not None:
+    if is_blocked(driver, market):
         return SkuResult(
             sku,
             Outcome.BLOCKED,
@@ -149,6 +186,25 @@ def add_sku(driver: WebDriver, sku: str, cfg: Settings) -> SkuResult:
     return SkuResult(
         sku, Outcome.ERROR, "Клик прошёл, но корзина не подтвердилась", _since(started)
     )
+
+
+def warm_up(driver: WebDriver, cfg: Settings) -> bool:
+    """Заходит на главную перед первым товаром.
+
+    Живой человек попадает на карточку с главной или из поиска, а не начинает
+    сессию с прямого захода на товар. Заход на главную даёт скриптам магазина
+    отработать и завести сессию. True — блокировки нет.
+    """
+    market = cfg.market
+    try:
+        driver.get(market.base_url)
+    except TimeoutException:
+        pass
+    except WebDriverException as exc:
+        log.debug("Разогрев не удался: %s", exc)
+        return False
+    time.sleep(cfg.micro_pause)
+    return not is_blocked(driver, market)
 
 
 def add_sku_with_retry(driver: WebDriver, sku: str, cfg: Settings) -> SkuResult:

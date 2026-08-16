@@ -15,6 +15,7 @@ from .config import Settings, ensure_app_dir
 from .markets import DEFAULT_MARKET, MARKETS
 from .runner import CartResult, CartRunner, Event, EventKind, open_cart_in_browser
 from .skus import MAX_SKU, MIN_SKU, dedupe_batches, parse_skus, split_evenly
+from .worker import Outcome
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ class CartBotApp(ttk.Frame):
         self.pause_var = tk.DoubleVar(value=0.35)
         self.retries_var = tk.IntVar(value=1)
         self.share_var = tk.BooleanVar(value=True)
+        self.captcha_var = tk.DoubleVar(value=120.0)
 
         # Маркетплейс выбирается на весь запуск: все потоки идут в один магазин.
         market_row = ttk.Frame(box)
@@ -124,6 +126,16 @@ class CartBotApp(ttk.Frame):
         ttk.Spinbox(
             box, from_=0, to=3, width=4, textvariable=self.retries_var
         ).grid(row=1, column=9, padx=(0, 12))
+
+        ttk.Label(box, text="Ждать капчу, с:").grid(row=1, column=13, padx=(12, 4))
+        ttk.Spinbox(
+            box,
+            from_=0,
+            to=600,
+            increment=30,
+            width=5,
+            textvariable=self.captcha_var,
+        ).grid(row=1, column=14)
 
         ttk.Checkbutton(box, text="Headless", variable=self.headless_var).grid(
             row=1, column=10, padx=(0, 8)
@@ -324,6 +336,7 @@ class CartBotApp(ttk.Frame):
         cfg.retries = int(self.retries_var.get())
         cfg.max_workers = max(1, int(self.workers_var.get()))
         cfg.fetch_share_link = bool(self.share_var.get())
+        cfg.captcha_wait = float(self.captcha_var.get())
         return cfg
 
     def _start(self) -> None:
@@ -354,6 +367,12 @@ class CartBotApp(ttk.Frame):
         self.cancel_btn.config(state="normal")
         self.status_label.config(text="Собираю…")
         self._append_log(f"Старт: {total} SKU в {len([b for b in batches if b])} поток(ах).")
+        if self.cfg.headless and self.cfg.captcha_wait > 0:
+            self._append_log(
+                "Внимание: включён Headless — окон нет, и пройти капчу вручную "
+                "будет невозможно. Если магазин показывает проверку, снимите "
+                "галку Headless."
+            )
 
         self.runner = CartRunner(self.cfg, batches, self.events.put)
         self.run_thread = threading.Thread(target=self.runner.run, daemon=True)
@@ -483,6 +502,37 @@ class CartBotApp(ttk.Frame):
         total = sum(cart.total for cart in self.carts.values())
         self.status_label.config(text=f"{message}: {added}/{total}")
         self._append_log(f"{message}. Итого добавлено {added} из {total}.")
+        self._advise_on_blocks()
+
+    def _advise_on_blocks(self) -> None:
+        """Подсказывает, что делать, если магазин показывал проверку.
+
+        Без этого массовая блокировка выглядит как поломка программы, и
+        непонятно, что крутить.
+        """
+        blocked = sum(
+            1
+            for cart in self.carts.values()
+            for result in cart.results
+            if result.outcome is Outcome.BLOCKED
+        )
+        if not blocked:
+            return
+
+        self._append_log(
+            f"Магазин показал проверку {blocked} раз(а). Что помогает, по "
+            "убыванию действенности:"
+        )
+        for advice in (
+            "снять галку «Headless» — тогда капчу можно пройти руками в окне",
+            "поставить 1 поток вместо нескольких: параллельные сессии с одного "
+            "адреса и вызывают проверку",
+            "снять галку «Без картинок» — браузер, не грузящий ни одной "
+            "картинки, выглядит нетипично",
+            "зайти кнопкой «Открыть корзину», войти в аккаунт и немного "
+            "полистать сайт: профиль сохранится, и к сессии будет больше доверия",
+        ):
+            self._append_log(f"  • {advice}")
 
     # ------------------------------------------------------------ корзины
 

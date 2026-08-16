@@ -12,7 +12,13 @@ from typing import Callable, List, Optional, Sequence
 from .cart import ShareResult, read_cart_summary
 from .config import Settings, ensure_app_dir
 from .driver import create_driver, quit_driver
-from .worker import Outcome, SkuResult, add_sku_with_retry
+from .worker import (
+    Outcome,
+    SkuResult,
+    add_sku_with_retry,
+    warm_up,
+    wait_until_unblocked,
+)
 
 log = logging.getLogger(__name__)
 
@@ -124,6 +130,42 @@ class CartRunner:
         self.emit(Event(EventKind.ALL_DONE, message="Сборка завершена"))
         return carts
 
+    def _survive_block(self, driver, thread_id: int) -> bool:
+        """Даёт человеку пройти капчу в окне потока. True — проверка снята.
+
+        В headless ждать бессмысленно: окна нет, решать капчу некому, — сразу
+        отвечаем «не прошли», чтобы поток не висел зря.
+        """
+        market = self.cfg.market
+        if self.cfg.headless or self.cfg.captcha_wait <= 0:
+            return False
+
+        self.emit(
+            Event(
+                EventKind.LOG,
+                thread_id=thread_id,
+                message=(
+                    f"Поток {thread_id}: {market.title} показал проверку. "
+                    f"Пройдите её в окне этого потока — жду "
+                    f"{int(self.cfg.captcha_wait)} с."
+                ),
+            )
+        )
+        passed = wait_until_unblocked(
+            driver, market, self.cfg.captcha_wait, self._cancel.is_set
+        )
+        self.emit(
+            Event(
+                EventKind.LOG,
+                thread_id=thread_id,
+                message=(
+                    f"Поток {thread_id}: "
+                    + ("проверка пройдена, продолжаю" if passed else "проверка не снята")
+                ),
+            )
+        )
+        return passed
+
     def _run_thread(self, thread_id: int, skus: List[str]) -> CartResult:
         import time
 
@@ -147,12 +189,22 @@ class CartRunner:
         driver = None
         try:
             driver = create_driver(self.cfg, profile)
+
+            if self.cfg.warm_up and not warm_up(driver, self.cfg):
+                self._survive_block(driver, thread_id)
+
             for sku in skus:
                 if self._cancel.is_set():
                     cart.error = "Отменено пользователем"
                     break
 
                 result = add_sku_with_retry(driver, sku, self.cfg)
+                if result.outcome is Outcome.BLOCKED and self._survive_block(
+                    driver, thread_id
+                ):
+                    # Проверку прошли — товар, на котором споткнулись, ещё не
+                    # добавлен, поэтому повторяем именно его.
+                    result = add_sku_with_retry(driver, sku, self.cfg)
                 cart.results.append(result)
                 if result.ok:
                     cart.added += 1
