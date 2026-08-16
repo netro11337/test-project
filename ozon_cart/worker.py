@@ -20,7 +20,7 @@ from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from .config import CART_URL, PRODUCT_URL, Settings
+from .config import PRODUCT_URL, Settings
 
 log = logging.getLogger(__name__)
 
@@ -185,33 +185,6 @@ def add_sku_with_retry(driver: WebDriver, sku: str, cfg: Settings) -> SkuResult:
         time.sleep(cfg.micro_pause)
         result = add_sku(driver, sku, cfg)
     return result
-
-
-def read_cart_summary(driver: WebDriver, cfg: Settings) -> tuple[str, int]:
-    """Открывает корзину потока и возвращает (ссылка, число позиций).
-
-    Ссылка всегда https://www.ozon.ru/cart — корзина Ozon привязана к сессии,
-    поэтому «своей» её делает профиль Chrome, а не адрес.
-    """
-    try:
-        driver.get(CART_URL)
-    except TimeoutException:
-        pass
-    except WebDriverException as exc:
-        log.debug("Не удалось открыть корзину: %s", exc)
-        return CART_URL, -1
-
-    try:
-        WebDriverWait(driver, cfg.element_timeout, poll_frequency=0.1).until(
-            EC.presence_of_element_located(
-                (By.CSS_SELECTOR, "div[data-widget='split'], div[data-widget='cartEmpty']")
-            )
-        )
-    except TimeoutException:
-        return CART_URL, -1
-
-    items = driver.find_elements(By.CSS_SELECTOR, "div[data-widget='cartItem']")
-    return CART_URL, len(items)
 
 
 def _since(started: float) -> float:

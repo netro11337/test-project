@@ -54,6 +54,9 @@ class Settings:
     retries: int = 1
     max_workers: int = 4
 
+    # После сборки жать «Поделиться корзиной» и забирать выданную ссылку.
+    fetch_share_link: bool = True
+
     # Профили Chrome: по одному на поток. Каждый профиль — отдельная сессия,
     # то есть отдельная корзина Ozon, которая переживает закрытие браузера.
     profiles_dir: Path = field(default=PROFILES_DIR)

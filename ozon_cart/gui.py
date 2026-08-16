@@ -57,6 +57,7 @@ class OzonCartApp(ttk.Frame):
         self.timeout_var = tk.DoubleVar(value=5.0)
         self.pause_var = tk.DoubleVar(value=0.35)
         self.retries_var = tk.IntVar(value=1)
+        self.share_var = tk.BooleanVar(value=True)
 
         ttk.Label(box, text="Потоков (корзин):").grid(row=0, column=0, padx=(0, 4))
         threads = ttk.Spinbox(
@@ -105,8 +106,11 @@ class OzonCartApp(ttk.Frame):
             row=0, column=10, padx=(0, 8)
         )
         ttk.Checkbutton(box, text="Без картинок", variable=self.images_var).grid(
-            row=0, column=11
+            row=0, column=11, padx=(0, 8)
         )
+        ttk.Checkbutton(
+            box, text="Ссылка «Поделиться»", variable=self.share_var
+        ).grid(row=0, column=12)
 
     def _build_body(self) -> None:
         pane = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
@@ -154,7 +158,7 @@ class OzonCartApp(ttk.Frame):
             ("progress", "Добавлено", 90),
             ("fails", "Ошибок", 70),
             ("time", "Время", 70),
-            ("cart", "Корзина", 210),
+            ("cart", "Ссылка на корзину", 260),
         ):
             self.tree.heading(col, text=title)
             self.tree.column(col, width=width, anchor="w")
@@ -176,9 +180,10 @@ class OzonCartApp(ttk.Frame):
             right,
             foreground="#666",
             text=(
-                "Корзина Ozon привязана к сессии: адрес у всех один "
-                "(ozon.ru/cart), но каждый поток держит свою в своём профиле "
-                "Chrome. Кнопка «Открыть корзину» поднимает нужную."
+                "Ссылка берётся кнопкой «Поделиться корзиной» на самой странице "
+                "корзины — её можно отправлять кому угодно. Если получить её не "
+                "вышло, в таблице будет пометка ⚠ и обычный ozon.ru/cart: тогда "
+                "смотрите корзину через «Открыть корзину»."
             ),
             wraplength=520,
             justify="left",
@@ -279,6 +284,7 @@ class OzonCartApp(ttk.Frame):
         cfg.micro_pause = float(self.pause_var.get())
         cfg.retries = int(self.retries_var.get())
         cfg.max_workers = max(1, int(self.workers_var.get()))
+        cfg.fetch_share_link = bool(self.share_var.get())
         return cfg
 
     def _start(self) -> None:
@@ -381,6 +387,7 @@ class OzonCartApp(ttk.Frame):
     def _on_thread_done(self, cart: CartResult) -> None:
         self.carts[cart.thread_id] = cart
         status = "Готово" if not cart.error else f"Ошибка: {cart.error}"
+        link = cart.url if cart.has_share_link else f"⚠ {cart.url}"
         row = str(cart.thread_id)
         if self.tree.exists(row):
             self.tree.item(
@@ -391,7 +398,7 @@ class OzonCartApp(ttk.Frame):
                     f"{cart.added}/{cart.total}",
                     cart.failed,
                     f"{cart.elapsed}s",
-                    cart.url,
+                    link,
                 ),
             )
         in_cart = (
@@ -403,6 +410,8 @@ class OzonCartApp(ttk.Frame):
             f"Поток {cart.thread_id} завершён: {cart.added}/{cart.total} "
             f"за {cart.elapsed}s{in_cart}"
         )
+        if cart.has_share_link:
+            self._append_log(f"Поток {cart.thread_id} · ссылка: {cart.url}")
 
     def _on_all_done(self, message: str) -> None:
         self.start_btn.config(state="normal")
@@ -429,7 +438,16 @@ class OzonCartApp(ttk.Frame):
         if cart is None:
             return
         self._to_clipboard(cart.url)
-        self.status_label.config(text=f"Ссылка потока {cart.thread_id} скопирована")
+        if cart.has_share_link:
+            self.status_label.config(text=f"Ссылка потока {cart.thread_id} скопирована")
+        else:
+            self.status_label.config(text=f"Поток {cart.thread_id}: только /cart")
+            messagebox.showwarning(
+                "Это не ссылка «Поделиться»",
+                f"Скопирован обычный адрес корзины.\n\nПричина: "
+                f"{cart.share_note or 'неизвестна'}.\n\nОткрыть корзину этого "
+                "потока можно кнопкой «Открыть корзину».",
+            )
 
     def _copy_all(self) -> None:
         if not self.carts:
@@ -437,6 +455,7 @@ class OzonCartApp(ttk.Frame):
             return
         lines = [
             f"Поток {cart.thread_id} ({cart.added}/{cart.total}): {cart.url}"
+            + ("" if cart.has_share_link else "  ⚠ не ссылка «Поделиться»")
             for cart in sorted(self.carts.values(), key=lambda c: c.thread_id)
         ]
         self._to_clipboard("\n".join(lines))

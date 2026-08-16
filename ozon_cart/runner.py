@@ -9,9 +9,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, List, Optional, Sequence
 
+from .cart import ShareResult, read_cart_summary
 from .config import CART_URL, Settings, ensure_app_dir
 from .driver import create_driver, quit_driver
-from .worker import Outcome, SkuResult, add_sku_with_retry, read_cart_summary
+from .worker import Outcome, SkuResult, add_sku_with_retry
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +41,8 @@ class CartResult:
 
     thread_id: int
     url: str = CART_URL
+    share_method: str = "fallback"
+    share_note: str = ""
     profile: str = ""
     total: int = 0
     added: int = 0
@@ -52,6 +55,16 @@ class CartResult:
     @property
     def done(self) -> int:
         return self.added + self.failed
+
+    @property
+    def has_share_link(self) -> bool:
+        """Ссылка получена кнопкой «Поделиться», а не подставлена как /cart."""
+        return self.share_method != "fallback"
+
+    def apply_share(self, share: ShareResult) -> None:
+        self.url = share.url
+        self.share_method = share.method
+        self.share_note = share.message
 
 
 Emit = Callable[[Event], None]
@@ -151,7 +164,19 @@ class CartRunner:
                     break
 
             if not self._cancel.is_set():
-                cart.url, cart.items_in_cart = read_cart_summary(driver, self.cfg)
+                share, cart.items_in_cart = read_cart_summary(driver, self.cfg)
+                cart.apply_share(share)
+                if not share.is_shared and share.message:
+                    self.emit(
+                        Event(
+                            EventKind.LOG,
+                            thread_id=thread_id,
+                            message=(
+                                f"Поток {thread_id}: ссылку «Поделиться» получить "
+                                f"не удалось ({share.message}), отдаю обычный /cart"
+                            ),
+                        )
+                    )
         except Exception as exc:  # noqa: BLE001
             cart.error = str(exc).splitlines()[0]
             log.exception("Поток %s: ошибка", thread_id)
