@@ -81,6 +81,7 @@ class CartBotApp(ttk.Frame):
         self.address_var = tk.StringVar(value="127.0.0.1:9222")
         self.pace_var = tk.BooleanVar(value=False)
         self.clear_var = tk.BooleanVar(value=True)
+        self.stealth_var = tk.BooleanVar(value=False)
 
         # Маркетплейс выбирается на весь запуск: все потоки идут в один магазин.
         market_row = ttk.Frame(box)
@@ -198,7 +199,28 @@ class CartBotApp(ttk.Frame):
             attach_row,
             text="Очищать корзину после ссылки",
             variable=self.clear_var,
+        ).pack(side="left", padx=(0, 16))
+        ttk.Checkbutton(
+            attach_row,
+            text="Подмена отпечатка",
+            variable=self.stealth_var,
+            command=self._on_stealth_change,
         ).pack(side="left")
+
+    def _on_stealth_change(self) -> None:
+        if not self.stealth_var.get():
+            self._append_log("Подмена отпечатка выключена.")
+            return
+        if self.attach_var.get():
+            self._append_log(
+                "Подмена отпечатка не действует в режиме «мой Chrome»: чужой "
+                "запущенный браузер мы не перенастраиваем."
+            )
+            return
+        self._append_log(
+            "Подмена отпечатка включена. У каждого потока свой постоянный "
+            "отпечаток, привязанный к его профилю."
+        )
 
     def _on_attach_change(self) -> None:
         if self.attach_var.get():
@@ -424,6 +446,7 @@ class CartBotApp(ttk.Frame):
         cfg.debug_address = self.address_var.get().strip() or "127.0.0.1:9222"
         cfg.human_pace = bool(self.pace_var.get())
         cfg.clear_cart_after = bool(self.clear_var.get())
+        cfg.stealth = bool(self.stealth_var.get())
         if cfg.attach_to_chrome:
             # Браузер один — параллелить нечего.
             cfg.max_workers = 1

@@ -278,7 +278,9 @@ class CartRunner:
         """Отдельный браузер под один список SKU."""
         driver = None
         try:
-            driver = create_driver(self.cfg, self.cfg.profile_for(thread_id))
+            driver = create_driver(
+                self.cfg, self.cfg.profile_for(thread_id), thread_id=thread_id
+            )
             if self.cfg.warm_up and not warm_up(driver, self.cfg):
                 self._survive_block(driver, thread_id)
             return self._collect(driver, thread_id, skus)

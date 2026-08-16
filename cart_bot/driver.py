@@ -11,16 +11,17 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 
 from .config import BLOCKED_URL_PATTERNS, Settings
+from .stealth import apply_stealth, describe, launch_arguments, stealth_fingerprint
 
 log = logging.getLogger(__name__)
 
-_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-)
 
-
-def _build_options(cfg: Settings, profile_dir: Path, headless: bool) -> Options:
+def _build_options(
+    cfg: Settings,
+    profile_dir: Path,
+    headless: bool,
+    fingerprint=None,
+) -> Options:
     opts = Options()
 
     if headless:
@@ -34,7 +35,15 @@ def _build_options(cfg: Settings, profile_dir: Path, headless: bool) -> Options:
     # eager: не ждём картинки и «хвост» загрузки — DOM готов, можно кликать.
     opts.page_load_strategy = "eager"
 
-    opts.add_argument("--window-size=1280,900")
+    if fingerprint is None:
+        opts.add_argument("--window-size=1280,900")
+        opts.add_argument("--lang=ru-RU")
+    else:
+        # Размер окна и язык берём из отпечатка, иначе они разойдутся с тем,
+        # что подменяется в JS.
+        for argument in launch_arguments(fingerprint):
+            opts.add_argument(argument)
+
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-gpu")
@@ -43,8 +52,6 @@ def _build_options(cfg: Settings, profile_dir: Path, headless: bool) -> Options:
     opts.add_argument("--disable-notifications")
     opts.add_argument("--no-first-run")
     opts.add_argument("--no-default-browser-check")
-    opts.add_argument("--lang=ru-RU")
-    opts.add_argument(f"--user-agent={_UA}")
 
     # Картинки НЕ отключаем флагами запуска (--blink-settings, prefs): их
     # нельзя вернуть на ходу, а капчу с картинкой-пазлом тогда не решить.
@@ -102,13 +109,15 @@ def create_driver(
     cfg: Settings,
     profile_dir: Path,
     headless: Optional[bool] = None,
+    thread_id: int = 1,
 ) -> webdriver.Chrome:
     """Поднимает Chrome с отключённой графикой и короткими таймаутами."""
     if cfg.attach_to_chrome:
         return attach_driver(cfg)
 
     use_headless = cfg.headless if headless is None else headless
-    options = _build_options(cfg, profile_dir, use_headless)
+    fingerprint = stealth_fingerprint(cfg, thread_id)
+    options = _build_options(cfg, profile_dir, use_headless, fingerprint)
 
     service = _resolve_service()
     driver = (
@@ -120,10 +129,20 @@ def create_driver(
     driver.set_page_load_timeout(cfg.page_load_timeout)
     driver.set_script_timeout(cfg.page_load_timeout)
 
-    # Подмены navigator.webdriver здесь намеренно нет. Она не только пытается
-    # выдать браузер за другой, но и работает против себя: подставленное
-    # свойство висит на самом объекте navigator, тогда как настоящее живёт в
+    # Отдельной кустарной подмены navigator.webdriver здесь нет: свойство
+    # снимается флагом --disable-blink-features=AutomationControlled, а всё
+    # остальное делает согласованный отпечаток. Ручная подстановка вешала
+    # свойство на сам объект navigator, тогда как настоящее живёт в
     # Navigator.prototype, и эта разница — известный признак автоматизации.
+    if fingerprint is not None:
+        applied = apply_stealth(driver, fingerprint)
+        log.info(
+            "Отпечаток потока %s: %s%s",
+            thread_id,
+            describe(fingerprint),
+            "" if applied else " (часть CDP-команд не прошла)",
+        )
+
     apply_resource_blocking(driver, cfg)
     return driver
 
