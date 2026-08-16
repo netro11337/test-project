@@ -76,7 +76,7 @@ class CartBotApp(ttk.Frame):
         self.share_var = tk.BooleanVar(value=True)
         self.captcha_var = tk.DoubleVar(value=120.0)
         self.settle_var = tk.DoubleVar(value=2.0)
-        self.clicks_var = tk.IntVar(value=3)
+        self.clicks_var = tk.IntVar(value=5)
         self.attach_var = tk.BooleanVar(value=False)
         self.address_var = tk.StringVar(value="127.0.0.1:9222")
         self.pace_var = tk.BooleanVar(value=False)
@@ -163,7 +163,7 @@ class CartBotApp(ttk.Frame):
 
         ttk.Label(box, text="Кликов:").grid(row=1, column=17, padx=(0, 4))
         ttk.Spinbox(
-            box, from_=1, to=5, width=4, textvariable=self.clicks_var
+            box, from_=1, to=10, width=4, textvariable=self.clicks_var
         ).grid(row=1, column=18)
 
         ttk.Checkbutton(box, text="Headless", variable=self.headless_var).grid(

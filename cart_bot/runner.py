@@ -13,7 +13,13 @@ from typing import Callable, List, Optional, Sequence
 
 from selenium.common.exceptions import WebDriverException
 
-from .cart import ShareResult, clear_cart, read_cart_summary
+from .cart import (
+    ShareResult,
+    clear_cart,
+    count_items,
+    open_cart,
+    read_cart_summary,
+)
 from .config import Settings, ensure_app_dir
 from .driver import (
     apply_resource_blocking,
@@ -201,6 +207,63 @@ class CartRunner:
         self.emit(Event(EventKind.ALL_DONE, message="Сборка завершена"))
         return carts
 
+    def _verify(self, driver, thread_id: int, skus: List[str], cart) -> None:
+        """Перепроверяет каждый товар и дожимает не попавшие в корзину.
+
+        Товар иногда не добавляется, хотя клик прошёл. Заново открытая карточка
+        сама показывает, лежит он в корзине или нет: если нет — жмём ещё раз.
+        Итоговый счёт берём отсюда, он ближе к правде, чем отчёт по кликам.
+        """
+        if not self.cfg.verify_cart or not skus:
+            return
+
+        if not open_cart(driver, self.cfg, self.cfg.market):
+            return
+        before = count_items(driver, self.cfg.market)
+        if before >= len(skus):
+            # Всё на месте — гонять по карточкам второй раз незачем.
+            return
+
+        self.emit(
+            Event(
+                EventKind.LOG,
+                thread_id=thread_id,
+                message=(
+                    f"Поток {thread_id}: в корзине {before} из {len(skus)}, "
+                    "перепроверяю товары"
+                ),
+            )
+        )
+
+        present = 0
+        fixed = 0
+        for sku in skus:
+            if self._cancel.is_set():
+                return
+            result = add_sku_with_retry(driver, sku, self.cfg)
+            if result.outcome is Outcome.ADDED:
+                fixed += 1
+                present += 1
+                self.emit(
+                    Event(EventKind.SKU_DONE, thread_id=thread_id, result=result)
+                )
+            elif result.ok:
+                present += 1
+            self._pace()
+
+        cart.added = present
+        cart.failed = len(skus) - present
+        self.emit(
+            Event(
+                EventKind.LOG,
+                thread_id=thread_id,
+                message=(
+                    f"Поток {thread_id}: проверка закончена, дожал {fixed}, "
+                    f"итого в корзине {present} из {len(skus)}"
+                ),
+            )
+        )
+
     def _pace(self) -> None:
         """Пауза вразнобой между товарами в человеческом темпе.
 
@@ -342,6 +405,8 @@ class CartRunner:
                 self._pace()
 
             if not self._cancel.is_set():
+                self._verify(driver, thread_id, skus, cart)
+
                 share, cart.items_in_cart = read_cart_summary(driver, self.cfg)
                 cart.apply_share(share)
 

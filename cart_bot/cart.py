@@ -386,6 +386,52 @@ def share_cart(driver: WebDriver, cfg: Settings) -> ShareResult:
     )
 
 
+# Кнопка удаления — иконка без подписи, найти её по тексту нельзя. Опираемся
+# на соседнюю кнопку «Поделиться» и берём соседа с нужной стороны: на Ozon
+# корзина правее, на Wildberries левее.
+_NEIGHBOUR_JS = """
+const share = arguments[0], side = arguments[1];
+let node = share;
+for (let depth = 0; depth < 6 && node.parentElement; depth++) {
+  node = node.parentElement;
+  const buttons = Array.from(node.querySelectorAll('button'));
+  const index = buttons.indexOf(share);
+  if (index !== -1 && buttons.length > 1) {
+    const target = side === 'left' ? buttons[index - 1] : buttons[index + 1];
+    if (target) return target;
+  }
+}
+return null;
+"""
+
+
+def find_clear_button(
+    driver: WebDriver, cfg: Settings, market: Market
+) -> Tuple[Optional[WebElement], str]:
+    """Ищет кнопку удаления: сначала по подписи, потом по соседству."""
+    for xpath in market.cart_clear_buttons:
+        try:
+            candidates = _visible(driver.find_elements(By.XPATH, xpath))
+        except WebDriverException:
+            continue
+        if candidates:
+            return candidates[0], xpath
+
+    share, _, _ = find_share_button(driver, cfg, market)
+    if share is None:
+        return None, ""
+
+    try:
+        neighbour = driver.execute_script(_NEIGHBOUR_JS, share, market.clear_side)
+    except WebDriverException as exc:
+        log.debug("Поиск соседней кнопки не удался: %s", exc)
+        return None, ""
+
+    if neighbour is None:
+        return None, ""
+    return neighbour, f"сосед «Поделиться» {market.clear_side}"
+
+
 def clear_cart(driver: WebDriver, cfg: Settings) -> Tuple[bool, str]:
     """Опустошает корзину, чтобы следующий круг начинался с чистой.
 
@@ -403,17 +449,11 @@ def clear_cart(driver: WebDriver, cfg: Settings) -> Tuple[bool, str]:
 
     ensure_all_selected(driver, market)
 
-    clicked = False
-    for xpath in market.cart_clear_buttons:
-        for element in _visible(driver.find_elements(By.XPATH, xpath)):
-            if _click(driver, element):
-                clicked = True
-                break
-        if clicked:
-            break
-
-    if not clicked:
+    button, how = find_clear_button(driver, cfg, market)
+    if button is None:
         return False, "кнопка удаления не найдена"
+    if not _click(driver, button):
+        return False, f"кнопка удаления найдена ({how}), но не нажалась"
 
     time.sleep(cfg.micro_pause)
 
@@ -426,11 +466,11 @@ def clear_cart(driver: WebDriver, cfg: Settings) -> Tuple[bool, str]:
     deadline = time.monotonic() + cfg.element_timeout
     while time.monotonic() < deadline:
         if count_items(driver, market) == 0:
-            return True, "корзина очищена"
+            return True, f"корзина очищена ({how})"
         time.sleep(0.2)
 
     left = count_items(driver, market)
-    return False, f"после удаления в корзине осталось позиций: {left}"
+    return False, f"нажал кнопку ({how}), но в корзине осталось позиций: {left}"
 
 
 def read_cart_summary(driver: WebDriver, cfg: Settings) -> Tuple[ShareResult, int]:
