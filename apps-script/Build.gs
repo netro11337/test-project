@@ -36,13 +36,15 @@ function buildStockFile() {
 
 /** Собирает файл с нуля для одного магазина. */
 function buildOneShop_(shop) {
-  var source = readSourceStocks_(shop.sheet);
+  var source = readSourceStocks_(shop);
   var outFolder = folderById_(shop.outputFolderId, 'готовые файлы');
   var warehouse = shop.warehouse || CONFIG.WAREHOUSE_NAME;
 
   if (!warehouse) {
-    throw new Error('Для сборки файла с нуля нужно название склада ровно ' +
-      'как в личном кабинете Ozon — укажите его в настройках.');
+    if (shop.platform !== 'wb') {
+      throw new Error('Для сборки файла с нуля нужно название склада ровно ' +
+        'как в личном кабинете — укажите его в настройках.');
+    }
   }
 
   var tmp = SpreadsheetApp.create('tmp-ozon-build-' + stamp_());
@@ -72,8 +74,7 @@ function buildOneShop_(shop) {
     sheet.getRange(2, 2, source.rows.length, 1).setNumberFormat('@');
     SpreadsheetApp.flush();
 
-    var fileName = 'ozon-ostatki-' +
-      (shop.name ? slug_(shop.name) + '-' : '') + stamp_() + '.xlsx';
+    var fileName = outputFileName_(shop);
     var out = exportXlsx_(tmpId, fileName, outFolder);
 
     return {

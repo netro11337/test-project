@@ -4,7 +4,7 @@
 
 function onOpen() {
   SpreadsheetApp.getUi()
-    .createMenu('Ozon')
+    .createMenu('Остатки')
     .addItem('Проверить данные', 'checkSource')
     .addSeparator()
     .addItem('Заполнить шаблон(ы) из ЛК', 'fillOzonTemplate')
@@ -24,7 +24,7 @@ function checkSource() {
     if (shops[s].name) lines.push('— ' + shops[s].name + ' (лист «' + shops[s].sheet + '») —');
 
     try {
-      var source = readSourceStocks_(shops[s].sheet);
+      var source = readSourceStocks_(shops[s]);
       var total = 0, zeros = 0;
       for (var i = 0; i < source.rows.length; i++) {
         total += source.rows[i].qty;

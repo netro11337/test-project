@@ -28,30 +28,59 @@ function normHeader_(v) {
 
 /**
  * Ищет в строке заголовков колонку по списку допустимых названий.
- * Сначала точное совпадение, затем — заголовок, начинающийся с алиаса
+ *
+ * Названия перебираются в порядке приоритета, а не в порядке колонок: если
+ * в шаблоне есть и «Артикул», и «Баркод», для Wildberries выберется баркод,
+ * потому что для него он стоит в списке первым.
+ *
+ * Сначала точные совпадения, затем — заголовки, начинающиеся с названия
  * (из нескольких подходящих берётся самый короткий, чтобы «Количество»
  * выигрывало у «Количество в упаковке»).
  * @return {number} индекс колонки или -1.
  */
 function matchColumn_(headerCells, aliases) {
   var norm = headerCells.map(normHeader_);
-  var i, j, k;
+  var i, a;
 
-  for (i = 0; i < norm.length; i++) {
-    if (norm[i] && aliases.indexOf(norm[i]) !== -1) return i;
-  }
-
-  var best = -1;
-  for (j = 0; j < norm.length; j++) {
-    if (!norm[j]) continue;
-    for (k = 0; k < aliases.length; k++) {
-      if (norm[j].indexOf(aliases[k]) === 0) {
-        if (best === -1 || norm[j].length < norm[best].length) best = j;
-        break;
-      }
+  for (a = 0; a < aliases.length; a++) {
+    for (i = 0; i < norm.length; i++) {
+      if (norm[i] && norm[i] === aliases[a]) return i;
     }
   }
-  return best;
+
+  for (a = 0; a < aliases.length; a++) {
+    var best = -1;
+    for (i = 0; i < norm.length; i++) {
+      if (norm[i] && norm[i].indexOf(aliases[a]) === 0) {
+        if (best === -1 || norm[i].length < norm[best].length) best = i;
+      }
+    }
+    if (best !== -1) return best;
+  }
+  return -1;
+}
+
+/**
+ * Названия колонки с кодом товара для площадки магазина.
+ * Ozon — артикул продавца, Wildberries — баркод.
+ */
+function idAliasesFor_(shop) {
+  var list = (shop && shop.platform === 'wb')
+    ? HEADER_ALIASES.barcode.concat(HEADER_ALIASES.sku)
+    : HEADER_ALIASES.sku.concat(HEADER_ALIASES.barcode);
+
+  if (shop && shop.idHeader) {
+    var own = normHeader_(shop.idHeader);
+    if (own) list = [own].concat(list.filter(function (a) { return a !== own; }));
+  }
+  return list;
+}
+
+/** То же для вашего листа: плюс заголовок из общих настроек, но пониже. */
+function sourceIdAliases_(shop) {
+  var list = idAliasesFor_(shop);
+  var own = normHeader_(CONFIG.SKU_HEADER);
+  return (own && list.indexOf(own) === -1) ? list.concat([own]) : list;
 }
 
 /** Список названий колонки с учётом значения из CONFIG. */
@@ -72,11 +101,11 @@ function parseQty_(v) {
 
 /**
  * Читает лист с остатками.
- * @param {string=} sheetName лист; по умолчанию CONFIG.SOURCE_SHEET.
+ * @param {Object=} shop магазин; без него — общие настройки.
  * @return {{map: Object, rows: Array, problems: Array}}
  */
-function readSourceStocks_(sheetName) {
-  var name = sheetName || CONFIG.SOURCE_SHEET;
+function readSourceStocks_(shop) {
+  var name = (shop && shop.sheet) || CONFIG.SOURCE_SHEET;
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sh = ss.getSheetByName(name);
   if (!sh) {
@@ -85,7 +114,7 @@ function readSourceStocks_(sheetName) {
   }
 
   var values = sh.getDataRange().getValues();
-  var skuAliases = aliasesFor_(CONFIG.SKU_HEADER, HEADER_ALIASES.sku);
+  var skuAliases = sourceIdAliases_(shop);
   var qtyAliases = aliasesFor_(CONFIG.QTY_HEADER, HEADER_ALIASES.qty);
 
   var headerRow = -1, skuCol = -1, qtyCol = -1;
@@ -95,8 +124,9 @@ function readSourceStocks_(sheetName) {
     if (s !== -1 && q !== -1) { headerRow = r; skuCol = s; qtyCol = q; break; }
   }
   if (headerRow === -1) {
-    throw new Error('На листе «' + name + '» не найдены колонки «' +
-      CONFIG.SKU_HEADER + '» и «' + CONFIG.QTY_HEADER +
+    throw new Error('На листе «' + name + '» не найдены колонка с кодом товара (' +
+      ((shop && shop.platform === 'wb') ? 'баркод' : 'артикул') +
+      ') и колонка «' + CONFIG.QTY_HEADER +
       '». Заголовки должны быть в одной из первых 10 строк.');
   }
 
@@ -293,7 +323,9 @@ function shopsList_() {
       sheet: raw[i].sheet,
       templateFolderId: raw[i].templateFolderId || CONFIG.TEMPLATE_FOLDER_ID,
       outputFolderId: raw[i].outputFolderId || CONFIG.OUTPUT_FOLDER_ID,
-      warehouse: raw[i].warehouse || ''
+      warehouse: raw[i].warehouse || '',
+      platform: raw[i].platform === 'wb' ? 'wb' : 'ozon',
+      idHeader: raw[i].idHeader || ''
     });
   }
 
@@ -303,7 +335,9 @@ function shopsList_() {
       sheet: CONFIG.SOURCE_SHEET,
       templateFolderId: CONFIG.TEMPLATE_FOLDER_ID,
       outputFolderId: CONFIG.OUTPUT_FOLDER_ID,
-      warehouse: CONFIG.WAREHOUSE_NAME
+      warehouse: CONFIG.WAREHOUSE_NAME,
+      platform: 'ozon',
+      idHeader: ''
     });
   }
   return list;

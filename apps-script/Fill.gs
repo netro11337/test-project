@@ -49,9 +49,11 @@ function fillOzonTemplate() {
 
 /** Готовит файл для одного магазина. */
 function fillOneShop_(shop) {
-  var source = readSourceStocks_(shop.sheet);
+  var source = readSourceStocks_(shop);
   var templateFolder = folderById_(shop.templateFolderId,
     'шаблон' + (shop.name ? ' магазина ' + shop.name : ' из ЛК'));
+  // Заголовок «Шаблон из ЛК» в отчёте одинаков для Ozon и WB — площадку
+  // видно по имени файла и по названию магазина.
   var outFolder = folderById_(shop.outputFolderId, 'готовые файлы');
 
   var templateFile = latestTemplateFile_(templateFolder);
@@ -59,8 +61,7 @@ function fillOneShop_(shop) {
 
   try {
     var result = applyStocks_(tmpId, source, shop);
-    var fileName = 'ozon-ostatki-' +
-      (shop.name ? slug_(shop.name) + '-' : '') + stamp_() + '.xlsx';
+    var fileName = outputFileName_(shop);
     var out = exportXlsx_(tmpId, fileName, outFolder);
 
     result.shop = shop.name;
@@ -74,6 +75,12 @@ function fillOneShop_(shop) {
   }
 }
 
+/** Имя готового файла: площадка, магазин, дата. */
+function outputFileName_(shop) {
+  return 'ostatki-' + (shop && shop.platform === 'wb' ? 'wb' : 'ozon') + '-' +
+    (shop && shop.name ? slug_(shop.name) + '-' : '') + stamp_() + '.xlsx';
+}
+
 /** Самый свежий .xls/.xlsx в папке с шаблонами. */
 function latestTemplateFile_(folder) {
   var files = folder.getFiles();
@@ -82,12 +89,12 @@ function latestTemplateFile_(folder) {
     var f = files.next();
     var name = f.getName().toLowerCase();
     if (name.indexOf('.xls') === -1) continue;
-    if (name.indexOf('ozon-ostatki-') === 0) continue;   // это наш же результат
+    if (name.indexOf('ostatki-') === 0) continue;        // это наш же результат
     if (!best || f.getLastUpdated() > best.getLastUpdated()) best = f;
   }
   if (!best) {
     throw new Error('В папке «' + folder.getName() +
-      '» нет ни одного файла .xls/.xlsx. Положите туда шаблон, скачанный из ЛК Ozon.');
+      '» нет ни одного файла .xls/.xlsx. Положите туда шаблон, скачанный из ЛК.');
   }
   return best;
 }
@@ -104,13 +111,14 @@ function applyStocks_(spreadsheetId, source, shop) {
   var loc = null;
 
   for (var s = 0; s < sheets.length; s++) {
-    loc = locateColumns_(sheets[s]);
+    loc = locateColumns_(sheets[s], shop);
     if (loc) break;
   }
   if (!loc) {
-    throw new Error('В шаблоне не найден лист с колонками артикула и количества. ' +
-      'Откройте шаблон, посмотрите точные названия колонок и добавьте их ' +
-      'в HEADER_ALIASES в файле Config.gs.');
+    throw new Error('В шаблоне не найден лист с колонками «' +
+      (shop && shop.platform === 'wb' ? 'баркод' : 'артикул') +
+      '» и количества. Откройте шаблон, посмотрите точные названия колонок ' +
+      'и добавьте их в HEADER_ALIASES в файле Config.gs.');
   }
 
   var sheet = loc.sheet;
@@ -156,7 +164,7 @@ function applyStocks_(spreadsheetId, source, shop) {
 
     var row = new Array(lastCol);
     for (var c = 0; c < lastCol; c++) row[c] = '';
-    row[loc.skuCol] = item.raw;
+    row[loc.skuCol] = String(item.raw);
     row[loc.qtyCol] = item.qty;
     if (loc.warehouseCol !== -1) row[loc.warehouseCol] = warehouse;
     if (loc.nameCol !== -1 && item.name) row[loc.nameCol] = item.name;
@@ -175,6 +183,10 @@ function applyStocks_(spreadsheetId, source, shop) {
     sheet.insertRowsAfter(sheet.getMaxRows(), needRows - sheet.getMaxRows());
   }
 
+  // Баркод 13 знаков и артикул с ведущими нулями должны остаться текстом,
+  // иначе Google превратит их в число и потеряет нули или точность.
+  sheet.getRange(dataStart, loc.skuCol + 1, existing.length, 1)
+    .setNumberFormat('@');
   sheet.getRange(dataStart, 1, existing.length, lastCol).setValues(existing);
   SpreadsheetApp.flush();
 
@@ -194,14 +206,15 @@ function applyStocks_(spreadsheetId, source, shop) {
  * @return {?{sheet: Sheet, headerRow: number, skuCol: number, qtyCol: number,
  *            warehouseCol: number, nameCol: number}}
  */
-function locateColumns_(sheet) {
+function locateColumns_(sheet, shop) {
   var lastRow = Math.min(sheet.getLastRow(), 20);
   var lastCol = sheet.getLastColumn();
   if (lastRow < 1 || lastCol < 1) return null;
 
+  var idAliases = idAliasesFor_(shop);
   var head = sheet.getRange(1, 1, lastRow, lastCol).getValues();
   for (var r = 0; r < head.length; r++) {
-    var skuCol = matchColumn_(head[r], HEADER_ALIASES.sku);
+    var skuCol = matchColumn_(head[r], idAliases);
     var qtyCol = matchColumn_(head[r], HEADER_ALIASES.qty);
     if (skuCol === -1 || qtyCol === -1) continue;
     return {
@@ -263,7 +276,8 @@ function isServiceRow_(row) {
 function resolveWarehouse_(sheet, loc, dataStart, shop) {
   if (loc.warehouseCol === -1) return '';
 
-  var wanted = (shop && shop.warehouse) || CONFIG.WAREHOUSE_NAME || '';
+  var wanted = (shop && shop.warehouse) ||
+    (shop && shop.platform === 'wb' ? '' : CONFIG.WAREHOUSE_NAME) || '';
   var where = shop && shop.name ? ' (магазин ' + shop.name + ')' : '';
   var options = warehouseOptions_(sheet, loc, dataStart);
 
@@ -284,6 +298,7 @@ function resolveWarehouse_(sheet, loc, dataStart, shop) {
     throw new Error('В шаблоне несколько складов' + where + ': ' +
       options.join(' | ') + '. Укажите нужный в настройках.');
   }
+  if (shop && shop.platform === 'wb') return '';   // у WB склад выбирается в ЛК
   throw new Error('Не удалось определить склад' + where +
     ': в шаблоне нет выпадающего списка. Впишите название склада в настройки ' +
     'ровно как в личном кабинете.');
