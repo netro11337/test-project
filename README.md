@@ -65,7 +65,13 @@ ID папки — это часть адреса: `drive.google.com/drive/folder
 
 ### 4. Код
 
-**Расширения → Apps Script**, затем перенесите содержимое папки `apps-script/`:
+Самый простой путь — один файл: откройте
+[`apps-script/single-file/OzonOstatki.gs`](apps-script/single-file/OzonOstatki.gs),
+скопируйте целиком и вставьте в `Код.gs` вместо заготовки. Затем слева
+**Сервисы → + → Drive API → v3 → Добавить**.
+
+Если удобнее держать код разбитым по файлам — **Расширения → Apps Script**,
+затем перенесите содержимое папки `apps-script/`:
 
 - `Config.gs`, `Utils.gs`, `Fill.gs`, `Build.gs`, `Menu.gs` — как отдельные файлы скрипта;
 - в **Настройках проекта** включите «Показывать файл манифеста `appsscript.json`»
@@ -76,9 +82,13 @@ ID папки — это часть адреса: `drive.google.com/drive/folder
 
 ```bash
 clasp clone <SCRIPT_ID>
-cp apps-script/* .
+cp apps-script/*.gs apps-script/appsscript.json .
 clasp push
 ```
+
+Однофайловая версия собирается из исходников командой
+`bash tools/build-single-file.sh` — править нужно файлы в `apps-script/`,
+а не собранный результат.
 
 ### 5. Настройки
 
