@@ -651,6 +651,63 @@ function fillOneShop_(shop) {
   }
 }
 
+/**
+ * Показывает, какой шаблон привязан к каждому магазину и какие склады
+ * в нём лежат. Файлов не создаёт — нужен, чтобы один раз убедиться,
+ * что папки не перепутаны: сам по шаблону скрипт этого понять не может.
+ */
+function checkTemplates() {
+  var shops = shopsList_();
+  var lines = [];
+
+  for (var i = 0; i < shops.length; i++) {
+    var shop = shops[i];
+    lines.push('— ' + (shop.name || 'магазин') +
+      ' (' + (shop.platform === 'wb' ? 'Wildberries' : 'Ozon') + ') —');
+
+    var tmpId = null;
+    try {
+      var folder = folderById_(shop.templateFolderId, 'шаблон ' + shop.name);
+      var file = latestTemplateFile_(folder);
+      lines.push('Папка: ' + folder.getName());
+      lines.push('Файл: ' + file.getName());
+
+      tmpId = convertToSheet_(file, 'tmp-check-' + stamp_());
+      var ss = SpreadsheetApp.openById(tmpId);
+      var sheets = ss.getSheets();
+      var loc = null;
+      for (var k = 0; k < sheets.length; k++) {
+        loc = locateColumns_(sheets[k], shop);
+        if (loc) break;
+      }
+
+      if (!loc) {
+        lines.push('НЕ РАЗОБРАН: не найдены колонки кода товара и количества.');
+      } else {
+        lines.push('Колонки распознаны, данные пишутся со строки ' +
+          findDataStart_(loc.sheet, loc) + '.');
+        if (loc.warehouseCol === -1) {
+          lines.push('Склад в файле не указывается.');
+        } else {
+          var opts = warehouseOptions_(loc.sheet, loc, findDataStart_(loc.sheet, loc));
+          lines.push(opts.length
+            ? 'Склады в шаблоне: ' + opts.join(' | ')
+            : 'Список складов в шаблоне не найден.');
+        }
+      }
+    } catch (e) {
+      lines.push('ОШИБКА: ' + e.message);
+    } finally {
+      if (tmpId) trashQuietly_(tmpId);
+    }
+    lines.push('');
+  }
+
+  lines.push('Сверьте склады с кабинетами: если у магазина показан чужой склад,',
+    'значит в его папку попал шаблон другого кабинета.');
+  tell_('Проверка шаблонов', lines.join('\n'));
+}
+
 /** Имя готового файла: площадка, магазин, дата. */
 function outputFileName_(shop) {
   return 'ostatki-' + (shop && shop.platform === 'wb' ? 'wb' : 'ozon') + '-' +
@@ -1076,6 +1133,7 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Остатки')
     .addItem('Проверить данные', 'checkSource')
+    .addItem('Проверить шаблоны', 'checkTemplates')
     .addSeparator()
     .addItem('Заполнить шаблон(ы) из ЛК', 'fillOzonTemplate')
     .addItem('Собрать файл(ы) с нуля', 'buildStockFile')

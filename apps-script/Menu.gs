@@ -6,6 +6,7 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Остатки')
     .addItem('Проверить данные', 'checkSource')
+    .addItem('Проверить шаблоны', 'checkTemplates')
     .addSeparator()
     .addItem('Заполнить шаблон(ы) из ЛК', 'fillOzonTemplate')
     .addItem('Собрать файл(ы) с нуля', 'buildStockFile')
