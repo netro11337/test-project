@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 import tkinter as tk
@@ -9,10 +10,13 @@ from tkinter import messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 from typing import Dict, List
 
+from .clipboard import enable_clipboard_hotkeys
 from .config import Settings, ensure_app_dir
 from .markets import DEFAULT_MARKET, MARKETS
 from .runner import CartResult, CartRunner, Event, EventKind, open_cart_in_browser
 from .skus import MAX_SKU, MIN_SKU, dedupe_batches, parse_skus, split_evenly
+
+log = logging.getLogger(__name__)
 
 MAX_THREADS = 20
 POLL_MS = 80
@@ -36,6 +40,7 @@ class CartBotApp(ttk.Frame):
         self.carts: Dict[int, CartResult] = {}
         self.opened_browsers: List[object] = []
 
+        enable_clipboard_hotkeys(master)
         self._build_settings()
         self._build_body()
         self._build_footer()
@@ -374,13 +379,37 @@ class CartBotApp(ttk.Frame):
 
     # ------------------------------------------------------------ события
 
+    def _set_cell(self, thread_id: int, column: str, value) -> None:
+        """Меняет одну ячейку в строке потока."""
+        row = str(thread_id)
+        if not self.tree.exists(row):
+            return
+        columns = list(self.tree["columns"])
+        if column not in columns:
+            return
+        values = list(self.tree.item(row, "values"))
+        values[columns.index(column)] = value
+        self.tree.item(row, values=values)
+
     def _pump_events(self) -> None:
+        """Забирает события потоков и перерисовывает окно.
+
+        Ошибка в обработке одного события не должна уносить весь цикл: без
+        перезапуска таймера окно навсегда перестанет обновляться, хотя потоки
+        продолжат работать, и это выглядит как зависшая программа.
+        """
         try:
             while True:
-                self._handle_event(self.events.get_nowait())
+                event = self.events.get_nowait()
+                try:
+                    self._handle_event(event)
+                except Exception as exc:  # noqa: BLE001
+                    log.exception("Не смог обработать событие %s", event.kind)
+                    self._append_log(f"Ошибка отображения: {exc}")
         except queue.Empty:
             pass
-        self.after(POLL_MS, self._pump_events)
+        finally:
+            self.after(POLL_MS, self._pump_events)
 
     def _handle_event(self, event: Event) -> None:
         if event.kind is EventKind.LOG:

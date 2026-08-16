@@ -11,4 +11,7 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # webdriver-manager пишет и в свой журнал, и в общий — каждая строка о
+    # загрузке драйвера печаталась дважды.
+    logging.getLogger("WDM").propagate = False
     main()
