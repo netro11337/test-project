@@ -291,7 +291,7 @@ class OzonRegistrationPanel:
 
                 if not sms_code:
                     self.log("✗ SMS код не получен")
-                    self.sms_service.cancel_activation(activation_id)
+                    self.sms_service.cancel_order(activation_id)
                     self.update_progress(i, account_count)
                     continue
 
@@ -307,14 +307,14 @@ class OzonRegistrationPanel:
                     if success:
                         self.log(f"✓ {message}")
                         self.add_result(result)
-                        self.sms_service.finish_activation(activation_id)
+                        self.sms_service.finish_order(activation_id)
                     else:
                         self.log(f"✗ Ошибка: {message}")
-                        self.sms_service.cancel_activation(activation_id)
+                        self.sms_service.cancel_order(activation_id)
 
                 except Exception as e:
                     self.log(f"✗ Ошибка регистрации: {str(e)}")
-                    self.sms_service.cancel_activation(activation_id)
+                    self.sms_service.cancel_order(activation_id)
 
                 self.update_progress(i + 1, account_count)
 

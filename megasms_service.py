@@ -5,7 +5,7 @@ MegaSMS Service Integration
 
 import requests
 import time
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict
 from dataclasses import dataclass
 
 
@@ -20,51 +20,61 @@ class SMSMessage:
 class MegaSMSService:
     """Работа с MegaSMS API"""
 
-    def __init__(self, api_key: str):
+    def __init__(self, token: str):
         """
         Инициализация MegaSMS сервиса
 
         Args:
-            api_key: API ключ MegaSMS
+            token: API токен (ключ) MegaSMS
         """
-        self.api_key = api_key
-        self.base_url = "https://megasms.lol/api"
+        self.token = token
+        self.base_url = "https://megasms.lol"
         self.session = requests.Session()
+        self.headers = {
+            "Content-Type": "application/json"
+        }
 
-    def get_phone_number(self, service: str = "ozончик") -> Optional[str]:
+    def get_phone_number(self, service_id: str = "ozончик") -> Optional[Dict]:
         """
         Получить номер телефона для регистрации
 
         Args:
-            service: Сервис (по умолчанию 'ozончик')
+            service_id: ID сервиса (по умолчанию 'ozончик')
 
         Returns:
-            Номер телефона или None при ошибке
+            Словарь с номером и ID активации или None при ошибке
         """
         try:
-            response = self.session.get(
-                f"{self.base_url}/get",
-                params={
-                    "apikey": self.api_key,
-                    "service": service,
-                    "lang": "en"
-                },
+            payload = {
+                "service_id": service_id,
+                "token": self.token
+            }
+
+            response = self.session.post(
+                f"{self.base_url}/api/get_number",
+                json=payload,
+                headers=self.headers,
                 timeout=10
             )
 
             if response.status_code == 200:
-                data = response.text
-                # API возвращает: активирован:номер_телефона:ID_активации
-                if ":" in data:
-                    parts = data.split(":")
-                    if len(parts) >= 3:
-                        phone_id = parts[1]
-                        activation_id = parts[2]
+                data = response.json()
+
+                # Проверяем различные форматы ответа
+                if isinstance(data, dict):
+                    # Ищем номер в ответе
+                    phone = data.get("phone") or data.get("number")
+                    order_id = data.get("order_id") or data.get("id")
+
+                    if phone and order_id:
                         return {
-                            "phone": phone_id,
-                            "activation_id": activation_id,
+                            "phone": phone,
+                            "order_id": order_id,
+                            "activation_id": order_id,
                             "raw": data
                         }
+
+                print(f"Ошибка в формате ответа: {data}")
                 return None
             else:
                 print(f"Ошибка при получении номера: {response.status_code} - {response.text}")
@@ -74,54 +84,52 @@ class MegaSMSService:
             print(f"Ошибка подключения к MegaSMS: {str(e)}")
             return None
 
-    def get_sms_code(self, activation_id: str, attempt: int = 1) -> Optional[str]:
+    def get_sms_code(self, order_id: str) -> Optional[str]:
         """
         Получить SMS код
 
         Args:
-            activation_id: ID активации из get_phone_number
-            attempt: Номер попытки (по умолчанию 1)
+            order_id: ID заказа (активации)
 
         Returns:
             SMS код или None
         """
         try:
-            response = self.session.get(
-                f"{self.base_url}/status",
-                params={
-                    "apikey": self.api_key,
-                    "id": activation_id
-                },
+            payload = {
+                "order_id": order_id,
+                "token": self.token
+            }
+
+            response = self.session.post(
+                f"{self.base_url}/api/get_order",
+                json=payload,
+                headers=self.headers,
                 timeout=10
             )
 
             if response.status_code == 200:
-                data = response.text
-                # API возвращает: статус:код или просто статус
-                if ":" in data:
-                    parts = data.split(":")
-                    if len(parts) >= 2:
-                        status = parts[0]
-                        sms_code = parts[1]
-                        if status == "ok":
-                            return sms_code
-                        elif status == "wait_sms":
-                            return None  # SMS еще не пришла
-                        elif status == "no_activation":
-                            return None  # Активация не найдена
+                data = response.json()
+
+                # Ищем SMS код в ответе
+                sms_code = data.get("sms") or data.get("code")
+
+                if sms_code:
+                    return sms_code
+
+                # Если кода нет, значит SMS еще не пришла
                 return None
 
         except Exception as e:
             print(f"Ошибка при получении SMS кода: {str(e)}")
             return None
 
-    def wait_for_sms(self, activation_id: str, max_wait: int = 120,
+    def wait_for_sms(self, order_id: str, max_wait: int = 120,
                      check_interval: int = 5) -> Optional[str]:
         """
         Ждать SMS код с таймаутом
 
         Args:
-            activation_id: ID активации
+            order_id: ID заказа
             max_wait: Максимальное время ожидания (сек)
             check_interval: Интервал проверки (сек)
 
@@ -130,7 +138,7 @@ class MegaSMSService:
         """
         elapsed = 0
         while elapsed < max_wait:
-            sms_code = self.get_sms_code(activation_id)
+            sms_code = self.get_sms_code(order_id)
             if sms_code:
                 return sms_code
 
@@ -140,23 +148,26 @@ class MegaSMSService:
 
         return None
 
-    def cancel_activation(self, activation_id: str) -> bool:
+    def cancel_order(self, order_id: str) -> bool:
         """
-        Отменить активацию
+        Отменить заказ
 
         Args:
-            activation_id: ID активации
+            order_id: ID заказа
 
         Returns:
             True если успешно
         """
         try:
-            response = self.session.get(
-                f"{self.base_url}/cancel",
-                params={
-                    "apikey": self.api_key,
-                    "id": activation_id
-                },
+            payload = {
+                "order_id": order_id,
+                "token": self.token
+            }
+
+            response = self.session.post(
+                f"{self.base_url}/api/cancel_order",
+                json=payload,
+                headers=self.headers,
                 timeout=10
             )
 
@@ -165,23 +176,26 @@ class MegaSMSService:
         except Exception:
             return False
 
-    def finish_activation(self, activation_id: str) -> bool:
+    def finish_order(self, order_id: str) -> bool:
         """
-        Завершить активацию
+        Завершить заказ
 
         Args:
-            activation_id: ID активации
+            order_id: ID заказа
 
         Returns:
             True если успешно
         """
         try:
-            response = self.session.get(
-                f"{self.base_url}/finish",
-                params={
-                    "apikey": self.api_key,
-                    "id": activation_id
-                },
+            payload = {
+                "order_id": order_id,
+                "token": self.token
+            }
+
+            response = self.session.post(
+                f"{self.base_url}/api/finish_order",
+                json=payload,
+                headers=self.headers,
                 timeout=10
             )
 
@@ -198,59 +212,58 @@ class MegaSMSService:
             Баланс в рублях или None
         """
         try:
-            response = self.session.get(
-                f"{self.base_url}/balance",
-                params={"apikey": self.api_key},
+            payload = {
+                "token": self.token
+            }
+
+            response = self.session.post(
+                f"{self.base_url}/api/get_balance",
+                json=payload,
+                headers=self.headers,
                 timeout=10
             )
 
             if response.status_code == 200:
-                balance_str = response.text
-                try:
-                    return float(balance_str)
-                except ValueError:
-                    return None
+                data = response.json()
 
-        except Exception:
+                # Ищем баланс в ответе
+                balance = data.get("balance") or data.get("account_balance")
+
+                if balance is not None:
+                    try:
+                        return float(balance)
+                    except (ValueError, TypeError):
+                        return None
+
+        except Exception as e:
+            print(f"Ошибка при получении баланса: {str(e)}")
             return None
 
-    def get_activation_cost(self, service: str = "ozончик") -> Optional[float]:
+    def get_services(self) -> Optional[List[Dict]]:
         """
-        Получить стоимость активации
-
-        Args:
-            service: Сервис
+        Получить список доступных сервисов
 
         Returns:
-            Стоимость или None
+            Список сервисов или None
         """
         try:
             response = self.session.get(
-                f"{self.base_url}/prices",
-                params={
-                    "apikey": self.api_key,
-                    "service": service
-                },
+                f"{self.base_url}/api/get_services",
                 timeout=10
             )
 
             if response.status_code == 200:
-                # API возвращает: услуга:стоимость
-                parts = response.text.split(":")
-                if len(parts) >= 2:
-                    try:
-                        return float(parts[1])
-                    except ValueError:
-                        return None
+                return response.json()
 
-        except Exception:
+        except Exception as e:
+            print(f"Ошибка при получении списка сервисов: {str(e)}")
             return None
 
 
 if __name__ == "__main__":
     # Пример использования
-    api_key = "lpkfsipROdyEIHPv"
-    sms_service = MegaSMSService(api_key)
+    token = "lpkfsipROdyEIHPv"
+    sms_service = MegaSMSService(token)
 
     print("Проверка баланса...")
     balance = sms_service.get_balance()
@@ -263,10 +276,10 @@ if __name__ == "__main__":
     phone_data = sms_service.get_phone_number("ozончик")
     if phone_data:
         print(f"✓ Получен номер: {phone_data['phone']}")
-        print(f"  ID активации: {phone_data['activation_id']}")
+        print(f"  ID заказа: {phone_data['order_id']}")
 
         print("\nОжидание SMS кода...")
-        sms_code = sms_service.wait_for_sms(phone_data['activation_id'])
+        sms_code = sms_service.wait_for_sms(phone_data['order_id'])
         if sms_code:
             print(f"✓ SMS код получен: {sms_code}")
         else:
