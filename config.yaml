@@ -1,0 +1,95 @@
+# Ozon Auto-Registration Configuration
+# Конфигурация системы автоматической регистрации Ozon
+
+# API Settings / Настройки API
+api:
+  # Ozon API Key
+  api_key: "${OZON_API_KEY}"
+
+  # Client ID для OAuth
+  client_id: "${OZON_CLIENT_ID}"
+
+  # Base URL для Ozon API
+  base_url: "https://api.ozon.ru"
+  auth_url: "https://auth.ozon.ru"
+
+  # Timeout для запросов (в секундах)
+  timeout: 10
+
+  # Количество повторных попыток при ошибке
+  max_retries: 3
+
+# Registration Settings / Настройки регистрации
+registration:
+  # Задержка между регистрациями (в секундах)
+  delay_between_registrations: 0.5
+
+  # Принимать условия использования автоматически
+  auto_accept_terms: true
+
+  # Подписываться на маркетинговую рассылку
+  auto_subscribe_marketing: true
+
+  # Требовать подтверждение email
+  require_email_verification: true
+
+  # Требовать подтверждение SMS
+  require_sms_verification: false
+
+# Validation Rules / Правила валидации
+validation:
+  # Минимальная длина пароля
+  min_password_length: 8
+
+  # Требовать заглавные буквы в пароле
+  require_uppercase: true
+
+  # Требовать цифры в пароле
+  require_digits: true
+
+  # Требовать минимальную длину имени
+  min_name_length: 2
+
+  # Допустимые форматы телефонов (регулярное выражение)
+  phone_pattern: "^\\d{10,11}$"
+
+# Database / База данных (опционально)
+database:
+  # Type: sqlite, postgresql, mysql
+  type: "sqlite"
+
+  # SQLite database file path
+  sqlite_path: "ozon_accounts.db"
+
+  # PostgreSQL settings
+  # postgresql:
+  #   host: "localhost"
+  #   port: 5432
+  #   database: "ozon_autoregister"
+  #   user: "${DB_USER}"
+  #   password: "${DB_PASSWORD}"
+
+# Logging / Логирование
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
+
+  # Log file path
+  log_file: "ozon_autoregister.log"
+
+  # Maximum log file size (MB)
+  max_size: 10
+
+  # Keep backup logs
+  backup_count: 5
+
+# Export Settings / Настройки экспорта
+export:
+  # Format: json, csv, xlsx
+  format: "json"
+
+  # Output directory
+  output_dir: "./results"
+
+  # Include detailed logs
+  include_logs: true
