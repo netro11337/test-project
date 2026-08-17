@@ -118,8 +118,9 @@ var CONFIG = {
   // ---------------------------------------------------------------------
   // Остатки по датам
   // ---------------------------------------------------------------------
-  // Лист можно вести блоками: строка с датой, под ней «sku / остатки»,
-  // ниже товары. Скрипт берёт блок на сегодня.
+  // Лист можно вести блоками: строка с датой, ниже товары. Скрипт берёт
+  // блок на сегодня. Заголовки «sku / остатки» достаточно написать один
+  // раз сверху — под каждой датой их повторять не нужно.
   //
   // Что делать, если блока на сегодня нет:
   //   'previous' — взять ближайший предыдущий и написать об этом в отчёте
@@ -399,51 +400,79 @@ function readSourceStocks_(shop) {
  * нормально: получится один блок, как раньше.
  */
 function findBlocks_(values, skuAliases, qtyAliases) {
-  var heads = [];
-  var r, i;
+  var year = new Date().getFullYear();
+  var marks = [];
+  var r, c, i;
 
+  // Размечаем лист: где строки заголовков, а где строки с датой
   for (r = 0; r < values.length; r++) {
     var s = matchColumn_(values[r], skuAliases);
     var q = matchColumn_(values[r], qtyAliases);
-    if (s === -1 || q === -1) continue;
-    heads.push({ headerRow: r, skuCol: s, qtyCol: q, date: null, dateRow: null });
+    if (s !== -1 && q !== -1) {
+      marks.push({ type: 'header', row: r, skuCol: s, qtyCol: q });
+      continue;
+    }
+    var d = null;
+    for (c = 0; c < values[r].length; c++) {
+      d = parseSheetDate_(values[r][c], year);
+      if (d) break;
+    }
+    if (d) marks.push({ type: 'date', row: r, date: d });
   }
 
-  var year = new Date().getFullYear();
+  var blocks = [];
+  var cols = null;                // последние встреченные заголовки
+  var pendingDate = null, pendingDateRow = null;
 
-  for (i = 0; i < heads.length; i++) {
-    // Выше искать можно только до предыдущего блока, иначе за дату можно
-    // принять что-нибудь из его данных
-    var floor = i > 0 ? heads[i - 1].headerRow + 1 : 0;
+  for (i = 0; i < marks.length; i++) {
+    var m = marks[i];
 
-    for (var up = 1; up <= 2; up++) {
-      var rowIdx = heads[i].headerRow - up;
-      if (rowIdx < floor) break;
+    if (m.type === 'header') {
+      cols = m;
+      blocks.push({
+        headerRow: m.row,
+        skuCol: m.skuCol,
+        qtyCol: m.qtyCol,
+        date: pendingDate,
+        dateRow: pendingDateRow,
+        dataStart: m.row + 1
+      });
+      pendingDate = null;
+      pendingDateRow = null;
+      continue;
+    }
 
-      var found = null;
-      for (var c = 0; c < values[rowIdx].length; c++) {
-        found = parseSheetDate_(values[rowIdx][c], year);
-        if (found) break;
-      }
-      if (found) {
-        heads[i].date = found;
-        heads[i].dateRow = rowIdx;
-        break;
-      }
+    // Строка с датой. Если сразу под ней свои заголовки — блок откроют они.
+    var next = marks[i + 1];
+    if (next && next.type === 'header' && next.row - m.row <= 2) {
+      pendingDate = m.date;
+      pendingDateRow = m.row;
+      continue;
+    }
+
+    // Заголовков нет — берём колонки предыдущего блока: на листе принято
+    // писать «sku / остатки» один раз, а дальше только даты.
+    if (cols) {
+      blocks.push({
+        headerRow: cols.row,
+        skuCol: cols.skuCol,
+        qtyCol: cols.qtyCol,
+        date: m.date,
+        dateRow: m.row,
+        dataStart: m.row + 1
+      });
     }
   }
 
-  for (i = 0; i < heads.length; i++) {
-    heads[i].dataStart = heads[i].headerRow + 1;
+  for (i = 0; i < blocks.length; i++) {
     var stop = values.length;
-    if (i + 1 < heads.length) {
-      stop = heads[i + 1].dateRow !== null
-        ? heads[i + 1].dateRow
-        : heads[i + 1].headerRow;
+    if (i + 1 < blocks.length) {
+      var nb = blocks[i + 1];
+      stop = nb.dateRow !== null ? nb.dateRow : nb.headerRow;
     }
-    heads[i].dataEnd = stop - 1;
+    blocks[i].dataEnd = stop - 1;
   }
-  return heads;
+  return blocks;
 }
 
 /** Выбирает блок на сегодня. */
