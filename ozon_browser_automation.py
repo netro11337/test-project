@@ -15,21 +15,41 @@ from playwright.async_api import async_playwright, Page, Browser, BrowserContext
 class OzonBrowserAutomation:
     """Автоматизация регистрации Озон через браузер"""
 
-    def __init__(self, headless: bool = False):
+    def __init__(self, headless: bool = False, use_existing_chrome: bool = False,
+                 debug_port: int = 9222):
         """
         Инициализация браузерной автоматизации
 
         Args:
             headless: Запускать ли браузер в фоне без отображения
+            use_existing_chrome: Подключаться к запущенному Chrome с отладкой
+            debug_port: Порт удаленной отладки Chrome (по умолчанию 9222)
         """
         self.headless = headless
+        self.use_existing_chrome = use_existing_chrome
+        self.debug_port = debug_port
         self.faker = Faker('ru_RU')
         self.browser: Optional[Browser] = None
+        self.playwright = None
 
     async def init_browser(self):
         """Инициализировать браузер"""
-        playwright = await async_playwright().start()
-        self.browser = await playwright.chromium.launch(headless=self.headless)
+        self.playwright = await async_playwright().start()
+
+        if self.use_existing_chrome:
+            try:
+                self.browser = await self.playwright.chromium.connect_over_cdp(
+                    f"http://localhost:{self.debug_port}"
+                )
+                print(f"✓ Подключен к Chrome на порту {self.debug_port}")
+            except Exception as e:
+                raise ConnectionError(
+                    f"Не удалось подключиться к Chrome на порту {self.debug_port}.\n"
+                    f"Убедитесь, что Chrome запущен с флагом --remote-debugging-port={self.debug_port}\n"
+                    f"Ошибка: {str(e)}"
+                )
+        else:
+            self.browser = await self.playwright.chromium.launch(headless=self.headless)
         return self.browser
 
     async def close_browser(self):
@@ -51,8 +71,19 @@ class OzonBrowserAutomation:
         Returns:
             Кортеж (успешно, сообщение)
         """
-        context = await self.browser.new_context()
-        page = await context.new_page()
+        if self.use_existing_chrome:
+            # Используем существующий контекст из подключенного Chrome
+            contexts = self.browser.contexts
+            if contexts:
+                context = contexts[0]
+            else:
+                context = await self.browser.new_context()
+            page = await context.new_page()
+            own_context = False
+        else:
+            context = await self.browser.new_context()
+            page = await context.new_page()
+            own_context = True
 
         try:
             # Шаг 1: Вход на озон и ввод номера
@@ -211,7 +242,13 @@ class OzonBrowserAutomation:
             return False, str(e)
 
         finally:
-            await context.close()
+            if own_context:
+                await context.close()
+            else:
+                try:
+                    await page.close()
+                except:
+                    pass
 
     async def run_complete_workflow(self, phone: str, sms_code: str,
                                     email: str, email_password: str) -> Tuple[bool, str, Optional[str]]:
@@ -240,8 +277,13 @@ class OzonBrowserAutomation:
 class OzonBrowserAutomationSync:
     """Синхронная версия OzonBrowserAutomation"""
 
-    def __init__(self, headless: bool = False):
-        self.automation = OzonBrowserAutomation(headless=headless)
+    def __init__(self, headless: bool = False, use_existing_chrome: bool = False,
+                 debug_port: int = 9222):
+        self.automation = OzonBrowserAutomation(
+            headless=headless,
+            use_existing_chrome=use_existing_chrome,
+            debug_port=debug_port
+        )
         self.loop = None
 
     def init_browser(self):

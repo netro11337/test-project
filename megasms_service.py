@@ -52,6 +52,7 @@ class MegaSMSService:
         Returns:
             Словарь с номером и ID активации или None при ошибке
         """
+        self.last_error = None
         try:
             self._wait_for_rate_limit()
 
@@ -84,13 +85,20 @@ class MegaSMSService:
                             "raw": data
                         }
 
-                print(f"Ошибка в формате ответа: {data}")
+                self.last_error = f"Неверный формат ответа: {data}"
+                print(f"❌ Ошибка в формате ответа: {data}")
                 return None
             else:
-                print(f"Ошибка при получении номера: {response.status_code} - {response.text}")
+                try:
+                    error_detail = response.json().get("detail", response.text)
+                except:
+                    error_detail = response.text
+                self.last_error = f"HTTP {response.status_code}: {error_detail}"
+                print(f"❌ Ошибка при получении номера: {response.status_code} - {error_detail}")
                 return None
 
         except Exception as e:
+            self.last_error = f"Ошибка подключения: {str(e)}"
             print(f"Ошибка подключения к MegaSMS: {str(e)}")
             return None
 

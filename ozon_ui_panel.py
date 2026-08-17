@@ -60,6 +60,31 @@ class OzonRegistrationPanel:
             width=10
         ).pack(anchor=tk.W, pady=(0, 15))
 
+        # Настройки браузера
+        browser_frame = ttk.LabelFrame(left_frame, text="Браузер", padding=5)
+        browser_frame.pack(fill=tk.X, pady=(0, 15))
+
+        self.use_own_chrome_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            browser_frame,
+            text="Использовать мой Chrome (с отладкой)",
+            variable=self.use_own_chrome_var,
+            command=self.toggle_chrome_settings
+        ).pack(anchor=tk.W)
+
+        port_frame = ttk.Frame(browser_frame)
+        port_frame.pack(fill=tk.X, pady=(5, 0))
+        ttk.Label(port_frame, text="Порт отладки:").pack(side=tk.LEFT)
+        self.debug_port_var = tk.StringVar(value="9222")
+        self.debug_port_entry = ttk.Entry(port_frame, textvariable=self.debug_port_var, width=8, state=tk.DISABLED)
+        self.debug_port_entry.pack(side=tk.LEFT, padx=(5, 0))
+
+        ttk.Button(
+            browser_frame,
+            text="Как запустить Chrome с отладкой?",
+            command=self.show_chrome_help
+        ).pack(anchor=tk.W, pady=(5, 0))
+
         # Email список
         ttk.Label(left_frame, text="Список Email (email:пароль):").pack(anchor=tk.W, pady=(0, 5))
         ttk.Button(left_frame, text="Загрузить из файла", command=self.load_emails_from_file).pack(
@@ -172,6 +197,41 @@ class OzonRegistrationPanel:
         self.results_text.config(state=tk.DISABLED)
         self.root.update()
 
+    def toggle_chrome_settings(self):
+        """Включить/выключить настройки собственного Chrome"""
+        if self.use_own_chrome_var.get():
+            self.debug_port_entry.config(state=tk.NORMAL)
+        else:
+            self.debug_port_entry.config(state=tk.DISABLED)
+
+    def show_chrome_help(self):
+        """Показать инструкции по запуску Chrome с отладкой"""
+        help_text = """Как запустить Chrome с удаленной отладкой:
+
+WINDOWS:
+1. Закройте ВСЕ окна Chrome
+2. Откройте Command Prompt (cmd)
+3. Выполните команду:
+
+"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --remote-debugging-port=9222 --user-data-dir="C:\\ChromeDebug"
+
+MacOS:
+/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/ChromeDebug
+
+LINUX:
+google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/ChromeDebug
+
+После этого:
+1. Chrome откроется с новым профилем
+2. Включите галочку "Использовать мой Chrome"
+3. Нажмите "Начать"
+
+ПРОВЕРКА:
+Откройте в браузере: http://localhost:9222
+Если увидите список вкладок - все работает!"""
+
+        messagebox.showinfo("Инструкция", help_text)
+
     def load_emails_from_file(self):
         """Загрузить email список из файла"""
         filename = filedialog.askopenfilename(
@@ -252,10 +312,24 @@ class OzonRegistrationPanel:
     def _registration_thread(self, account_count: int):
         """Поток регистрации"""
         self.update_status("Инициализация браузера...", "blue")
-        self.log("Инициализация браузера Chrome...")
+
+        use_own_chrome = self.use_own_chrome_var.get()
+        try:
+            debug_port = int(self.debug_port_var.get())
+        except ValueError:
+            debug_port = 9222
+
+        if use_own_chrome:
+            self.log(f"Подключение к Chrome на порту {debug_port}...")
+        else:
+            self.log("Инициализация браузера Chrome...")
 
         try:
-            self.browser_automation = OzonBrowserAutomationSync(headless=False)
+            self.browser_automation = OzonBrowserAutomationSync(
+                headless=False,
+                use_existing_chrome=use_own_chrome,
+                debug_port=debug_port
+            )
             self.browser_automation.init_browser()
             self.log("✓ Браузер инициализирован")
 
@@ -277,7 +351,8 @@ class OzonRegistrationPanel:
                 phone_data = self.sms_service.get_phone_number("ozon")
 
                 if not phone_data:
-                    self.log("✗ Не удалось получить номер телефона")
+                    error = getattr(self.sms_service, 'last_error', 'Неизвестная ошибка')
+                    self.log(f"✗ Не удалось получить номер телефона: {error}")
                     self.update_progress(i, account_count)
                     continue
 
