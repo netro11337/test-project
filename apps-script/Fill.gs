@@ -61,6 +61,7 @@ function fillOneShop_(shop) {
 
   try {
     var result = applyStocks_(tmpId, source, shop);
+    result.dateLabel = source.dateLabel;
     var fileName = outputFileName_(shop);
     var out = exportXlsx_(tmpId, fileName, outFolder);
 
@@ -437,6 +438,7 @@ function report_(results, errors) {
     var r = results[i];
     if (r.shop) lines.push('— ' + r.shop + ' —');
     lines.push('Файл: ' + r.fileName);
+    if (r.dateLabel) lines.push('Остатки за: ' + r.dateLabel);
     lines.push('Строк с остатками: ' + r.updated);
     if (r.added && r.added !== r.updated) lines.push('Дописано: ' + r.added);
     if (r.zeroed) lines.push('Обнулено (нет в таблице): ' + r.zeroed);

@@ -84,6 +84,7 @@ function buildOneShop_(shop) {
       added: source.rows.length,
       zeroed: 0,
       warehouse: warehouse,
+      dateLabel: source.dateLabel,
       problems: source.problems,
       fileName: fileName,
       fileUrl: out.getUrl(),

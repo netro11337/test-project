@@ -31,6 +31,7 @@ function checkSource() {
         total += source.rows[i].qty;
         if (source.rows[i].qty === 0) zeros++;
       }
+      if (source.dateLabel) lines.push('Остатки за: ' + source.dateLabel);
       lines.push('Строк с товарами: ' + source.rows.length);
       lines.push('Из них с нулевым остатком: ' + zeros);
       lines.push('Суммарное количество: ' + total);

@@ -112,18 +112,18 @@ function readSourceStocks_(shop) {
   var skuAliases = sourceIdAliases_(shop);
   var qtyAliases = aliasesFor_(CONFIG.QTY_HEADER, HEADER_ALIASES.qty);
 
-  var headerRow = -1, skuCol = -1, qtyCol = -1;
-  for (var r = 0; r < Math.min(values.length, 10); r++) {
-    var s = matchColumn_(values[r], skuAliases);
-    var q = matchColumn_(values[r], qtyAliases);
-    if (s !== -1 && q !== -1) { headerRow = r; skuCol = s; qtyCol = q; break; }
-  }
-  if (headerRow === -1) {
+  var blocks = findBlocks_(values, skuAliases, qtyAliases);
+  if (!blocks.length) {
     throw new Error('На листе «' + name + '» не найдены колонка с кодом товара (' +
       ((shop && shop.platform === 'wb') ? 'баркод' : 'артикул') +
-      ') и колонка «' + CONFIG.QTY_HEADER +
-      '». Заголовки должны быть в одной из первых 10 строк.');
+      ') и колонка «' + CONFIG.QTY_HEADER + '».');
   }
+
+  var chosen = pickBlock_(blocks, name);
+  var block = chosen.block;
+  var headerRow = block.headerRow;
+  var skuCol = block.skuCol;
+  var qtyCol = block.qtyCol;
 
   // Название товара — необязательно, Ozon его не требует
   var nameCol = matchColumn_(values[headerRow],
@@ -131,9 +131,9 @@ function readSourceStocks_(shop) {
 
   var map = {};
   var rows = [];
-  var problems = [];
+  var problems = chosen.notes.slice();
 
-  for (var i = headerRow + 1; i < values.length; i++) {
+  for (var i = block.dataStart; i <= block.dataEnd; i++) {
     var rawSku = values[i][skuCol];
     var rawQty = values[i][qtyCol];
     var sku = normKey_(rawSku);
@@ -166,9 +166,151 @@ function readSourceStocks_(shop) {
   }
 
   if (!rows.length) {
-    throw new Error('На листе «' + name + '» нет ни одной строки с данными.');
+    throw new Error('На листе «' + name + '» нет ни одной строки с данными' +
+      (chosen.dateLabel ? ' на ' + chosen.dateLabel : '') + '.');
   }
-  return { map: map, rows: rows, problems: problems };
+  return {
+    map: map,
+    rows: rows,
+    problems: problems,
+    dateLabel: chosen.dateLabel
+  };
+}
+
+/**
+ * Разбирает лист на блоки «дата → таблица остатков».
+ *
+ * Ожидаемый вид (блоки идут один под другим):
+ *
+ *          17.08
+ *   sku    остатки
+ *   ART-1     12
+ *
+ *          18.08
+ *   sku    остатки
+ *   ART-1     10
+ *
+ * Дата ищется в одной-двух строках над заголовком. Лист без дат — тоже
+ * нормально: получится один блок, как раньше.
+ */
+function findBlocks_(values, skuAliases, qtyAliases) {
+  var heads = [];
+  var r, i;
+
+  for (r = 0; r < values.length; r++) {
+    var s = matchColumn_(values[r], skuAliases);
+    var q = matchColumn_(values[r], qtyAliases);
+    if (s === -1 || q === -1) continue;
+    heads.push({ headerRow: r, skuCol: s, qtyCol: q, date: null, dateRow: null });
+  }
+
+  var year = new Date().getFullYear();
+
+  for (i = 0; i < heads.length; i++) {
+    // Выше искать можно только до предыдущего блока, иначе за дату можно
+    // принять что-нибудь из его данных
+    var floor = i > 0 ? heads[i - 1].headerRow + 1 : 0;
+
+    for (var up = 1; up <= 2; up++) {
+      var rowIdx = heads[i].headerRow - up;
+      if (rowIdx < floor) break;
+
+      var found = null;
+      for (var c = 0; c < values[rowIdx].length; c++) {
+        found = parseSheetDate_(values[rowIdx][c], year);
+        if (found) break;
+      }
+      if (found) {
+        heads[i].date = found;
+        heads[i].dateRow = rowIdx;
+        break;
+      }
+    }
+  }
+
+  for (i = 0; i < heads.length; i++) {
+    heads[i].dataStart = heads[i].headerRow + 1;
+    var stop = values.length;
+    if (i + 1 < heads.length) {
+      stop = heads[i + 1].dateRow !== null
+        ? heads[i + 1].dateRow
+        : heads[i + 1].headerRow;
+    }
+    heads[i].dataEnd = stop - 1;
+  }
+  return heads;
+}
+
+/** Выбирает блок на сегодня. */
+function pickBlock_(blocks, sheetName) {
+  var dated = [];
+  var i;
+  for (i = 0; i < blocks.length; i++) {
+    if (blocks[i].date) dated.push(blocks[i]);
+  }
+  if (!dated.length) {
+    return { block: blocks[0], notes: [], dateLabel: '' };
+  }
+
+  var now = new Date();
+  var today = dateKey_(now.getFullYear(), now.getMonth() + 1, now.getDate());
+  var exact = null, prev = null;
+
+  for (i = 0; i < dated.length; i++) {
+    if (dated[i].date === today) exact = dated[i];
+    if (dated[i].date < today && (!prev || dated[i].date > prev.date)) prev = dated[i];
+  }
+
+  if (exact) {
+    return { block: exact, notes: [], dateLabel: dateLabel_(exact.date) };
+  }
+
+  if (CONFIG.DATE_FALLBACK === 'previous' && prev) {
+    return {
+      block: prev,
+      notes: ['На сегодня (' + dateLabel_(today) + ') на листе «' + sheetName +
+        '» блока нет, взяты остатки за ' + dateLabel_(prev.date) + '.'],
+      dateLabel: dateLabel_(prev.date)
+    };
+  }
+
+  var all = [];
+  for (i = 0; i < dated.length; i++) all.push(dateLabel_(dated[i].date));
+  throw new Error('На листе «' + sheetName + '» нет остатков на сегодня (' +
+    dateLabel_(today) + '). Даты на листе: ' + all.join(', ') + '.');
+}
+
+/** Дата как число 20260817 — так их удобно сравнивать. */
+function dateKey_(y, m, d) {
+  return y * 10000 + m * 100 + d;
+}
+
+function dateLabel_(key) {
+  var d = key % 100;
+  var m = Math.floor(key / 100) % 100;
+  var y = Math.floor(key / 10000);
+  return (d < 10 ? '0' + d : d) + '.' + (m < 10 ? '0' + m : m) + '.' + y;
+}
+
+/**
+ * Дата из ячейки: либо настоящая дата, либо текст «17.08», «17.08.26»,
+ * «17/08/2026». Год можно не писать — возьмётся текущий.
+ * Обычные числа датами не считаются: это почти всегда количество.
+ */
+function parseSheetDate_(v, defaultYear) {
+  if (v instanceof Date) {
+    return dateKey_(v.getFullYear(), v.getMonth() + 1, v.getDate());
+  }
+  var m = String(v === null || v === undefined ? '' : v).trim()
+    .match(/^(\d{1,2})[.\-\/](\d{1,2})(?:[.\-\/](\d{2,4}))?$/);
+  if (!m) return null;
+
+  var d = parseInt(m[1], 10);
+  var mo = parseInt(m[2], 10);
+  var y = m[3] ? parseInt(m[3], 10) : defaultYear;
+  if (y < 100) y += 2000;
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  return dateKey_(y, mo, d);
 }
 
 /**
@@ -256,8 +398,10 @@ function stamp_() {
     Session.getScriptTimeZone(), 'yyyy-MM-dd_HHmm');
 }
 
-/** Пишет строку в лист «Лог». */
+/** Пишет строку в лист «Лог», если он включён в настройках. */
 function logRun_(result) {
+  if (!CONFIG.WRITE_LOG) return;
+
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sh = ss.getSheetByName(LOG_SHEET);
   if (!sh) {
@@ -306,7 +450,8 @@ function mailResults_(results, errors) {
   for (var i = 0; i < results.length; i++) {
     var r = results[i];
     lines.push((r.shop ? r.shop + ' — ' : '') + r.fileName);
-    lines.push('  строк: ' + (r.updated || 0) + ', склад: ' + (r.warehouse || '—'));
+    lines.push('  строк: ' + (r.updated || 0) + ', склад: ' + (r.warehouse || '—') +
+      (r.dateLabel ? ', остатки за ' + r.dateLabel : ''));
     if (r.problems && r.problems.length) {
       lines.push('  замечания: ' + r.problems.join('; '));
     }
