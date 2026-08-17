@@ -5,21 +5,19 @@
 cd "$(dirname "$0")" || exit 1
 
 echo ""
-echo "╔════════════════════════════════════════════════════════════╗"
-echo "║                                                            ║"
-echo "║      📱 TELEGRAM MEDIA DOWNLOADER                          ║"
-echo "║                                                            ║"
-echo "╚════════════════════════════════════════════════════════════╝"
+echo "============================================================"
+echo "TELEGRAM MEDIA DOWNLOADER"
+echo "============================================================"
 echo ""
 
-# Проверка Python
+# Check Python
 if ! command -v python3 &> /dev/null; then
-    echo "❌ Python3 не установлен"
-    echo "Установите: brew install python3 (macOS) или apt install python3 (Linux)"
+    echo "[-] Python3 not found"
+    echo "Install: brew install python3 (macOS) or apt install python3 (Linux)"
     exit 1
 fi
 
-echo "✅ Python найден"
+echo "[+] Python found"
 echo ""
 
 # Запуск setup wizard

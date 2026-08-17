@@ -53,25 +53,25 @@ class TelegramMediaDownloader:
             # Скачиваем медиа
             await self.client.download_media(message, folder_path)
             downloaded_count += 1
-            logger.info(f"✅ Скачано: {filename or 'файл'}")
+            logger.info(f"[+] Downloaded: {filename or 'file'}")
 
         except Exception as e:
-            logger.error(f"❌ Ошибка скачивания: {e}")
+            logger.error(f"[-] Download error: {e}")
 
         return downloaded_count
 
     async def download_chat_messages(self, chat_identifier: str, limit: int = 100,
                                     caption_filter: Optional[str] = None):
         """
-        Скачивает все медиа из чата с подписями
+        Downloads all media from chat with captions
 
         Args:
-            chat_identifier: ID чата или username
-            limit: количество последних сообщений для проверки
-            caption_filter: если указан, скачивает только сообщения с этой подписью
+            chat_identifier: Chat ID or username
+            limit: Number of recent messages to check
+            caption_filter: If set, download only messages with this caption
         """
         async with self.client:
-            logger.info(f"🔍 Получение сообщений из чата: {chat_identifier}")
+            logger.info(f"[*] Getting messages from: {chat_identifier}")
 
             async for message in self.client.iter_messages(chat_identifier, limit=limit):
                 if not message.media:
@@ -92,20 +92,20 @@ class TelegramMediaDownloader:
                 folder_path = os.path.join(self.downloads_folder, folder_name)
                 os.makedirs(folder_path, exist_ok=True)
 
-                logger.info(f"\n📁 Создана папка: {folder_name}")
-                logger.info(f"📝 Подпись: {caption or '(без подписи)'}")
+                logger.info(f"\n[*] Created folder: {folder_name}")
+                logger.info(f"[*] Caption: {caption or '(no caption)'}")
 
-                # Скачиваем медиа
+                # Download media
                 downloaded = await self._download_media_group(message, folder_path)
-                logger.info(f"✅ Скачано файлов: {downloaded}\n")
+                logger.info(f"[+] Files downloaded: {downloaded}\n")
 
     async def listen_and_download(self, chat_identifier: str):
         """
-        Слушает чат и автоматически скачивает новые медиа
+        Listens to chat and automatically downloads new media
         """
         async with self.client:
-            logger.info(f"🎧 Слушаю чат: {chat_identifier}")
-            logger.info("Ожидание новых сообщений... (Ctrl+C для выхода)")
+            logger.info(f"[*] Listening to: {chat_identifier}")
+            logger.info("[*] Waiting for new messages... (Ctrl+C to exit)")
 
             @self.client.on(events.NewMessage(chats=chat_identifier))
             async def handler(event):
@@ -120,56 +120,56 @@ class TelegramMediaDownloader:
                 folder_path = os.path.join(self.downloads_folder, folder_name)
                 os.makedirs(folder_path, exist_ok=True)
 
-                logger.info(f"\n🆕 Новое сообщение!")
-                logger.info(f"📁 Создана папка: {folder_name}")
-                logger.info(f"📝 Подпись: {caption or '(без подписи)'}")
+                logger.info(f"\n[*] New message!")
+                logger.info(f"[*] Created folder: {folder_name}")
+                logger.info(f"[*] Caption: {caption or '(no caption)'}")
 
                 downloaded = await self._download_media_group(message, folder_path)
-                logger.info(f"✅ Скачано файлов: {downloaded}\n")
+                logger.info(f"[+] Files downloaded: {downloaded}\n")
 
             # Остаемся в слушающем режиме
             await self.client.run_until_disconnected()
 
 
 def main():
-    # ⚙️ КОНФИГУРАЦИЯ (заполните ваши данные из https://my.telegram.org)
+    # CONFIGURATION (fill in your data from https://my.telegram.org)
     API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
     API_HASH = os.getenv("TELEGRAM_API_HASH", "")
     PHONE = os.getenv("TELEGRAM_PHONE", "")
 
     if not API_ID or not API_HASH or not PHONE:
-        print("❌ Ошибка: установите переменные окружения:")
+        print("[-] Error: set environment variables:")
         print("   export TELEGRAM_API_ID=12345")
         print("   export TELEGRAM_API_HASH='xxxxxxxxxxxxxxx'")
         print("   export TELEGRAM_PHONE='+79991234567'")
         return
 
-    # Папка для сохранения
+    # Save folder
     downloads_folder = str(Path.home() / "Downloads" / "telegram_downloads")
     os.makedirs(downloads_folder, exist_ok=True)
 
     downloader = TelegramMediaDownloader(API_ID, API_HASH, PHONE, downloads_folder)
 
-    # Выбор режима работы
-    print("\n📱 Telegram Media Downloader")
+    # Choose mode
+    print("\nTelegram Media Downloader")
     print("=" * 40)
-    print("1. 📥 Скачать все медиа из чата (последние 100 сообщений)")
-    print("2. 🎧 Слушать чат и скачивать новые медиа")
-    print("3. 🔍 Скачать только сообщения с определенной подписью")
+    print("1. Download all media from chat (last 100 messages)")
+    print("2. Listen and download new media")
+    print("3. Download only specific captions")
     print("=" * 40)
 
-    choice = input("\nВыберите режим (1-3): ").strip()
-    chat_input = input("Введите ID/username чата (例: -1001234567890 или @mychat): ").strip()
+    choice = input("\nSelect mode (1-3): ").strip()
+    chat_input = input("Enter chat ID/username (-1001234567890 or @mychat): ").strip()
 
     if choice == "1":
         asyncio.run(downloader.download_chat_messages(chat_input))
     elif choice == "2":
         asyncio.run(downloader.listen_and_download(chat_input))
     elif choice == "3":
-        caption_filter = input("Введите подпись для поиска (例: 0891-1): ").strip()
+        caption_filter = input("Enter caption to search (e.g. 0891-1): ").strip()
         asyncio.run(downloader.download_chat_messages(chat_input, caption_filter=caption_filter))
     else:
-        print("❌ Неверный выбор")
+        print("[-] Invalid choice")
 
 
 if __name__ == "__main__":
