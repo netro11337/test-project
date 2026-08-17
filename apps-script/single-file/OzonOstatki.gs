@@ -327,6 +327,11 @@ function readSourceStocks_(shop) {
 
   var chosen = pickBlock_(blocks, name);
   var block = chosen.block;
+
+  var dates = [];
+  for (var b = 0; b < blocks.length; b++) {
+    if (blocks[b].date) dates.push(blocks[b].date);
+  }
   var headerRow = block.headerRow;
   var skuCol = block.skuCol;
   var qtyCol = block.qtyCol;
@@ -379,8 +384,34 @@ function readSourceStocks_(shop) {
     map: map,
     rows: rows,
     problems: problems,
-    dateLabel: chosen.dateLabel
+    dateLabel: chosen.dateLabel,
+    dates: dates
   };
+}
+
+/** Ключ даты через N дней от сегодня (0 — сегодня, 1 — завтра). */
+function dayShiftKey_(days) {
+  var n = new Date();
+  var d = new Date(n.getFullYear(), n.getMonth(), n.getDate() + days);
+  return dateKey_(d.getFullYear(), d.getMonth() + 1, d.getDate());
+}
+
+/**
+ * Что будет взято на указанную дату — словами. Нужно, чтобы заранее увидеть,
+ * отработает ли автозапуск завтра, не дожидаясь утра.
+ */
+function describePick_(dates, key) {
+  if (!dates.length) return 'дат на листе нет — берётся весь лист';
+
+  var prev = null;
+  for (var i = 0; i < dates.length; i++) {
+    if (dates[i] === key) return 'будет взят блок ' + dateLabel_(key);
+    if (dates[i] < key && (prev === null || dates[i] > prev)) prev = dates[i];
+  }
+  if (CONFIG.DATE_FALLBACK === 'previous' && prev !== null) {
+    return 'блока нет, возьмётся предыдущий — ' + dateLabel_(prev);
+  }
+  return 'блока нет, файл НЕ будет создан';
 }
 
 /**
@@ -1411,6 +1442,15 @@ function checkSource() {
           source.problems.slice(0, 15).join('\n'));
       } else {
         lines.push('Ошибок в данных не найдено.');
+      }
+      if (source.dates.length) {
+        var labels = [];
+        for (var d = 0; d < source.dates.length; d++) {
+          labels.push(dateLabel_(source.dates[d]));
+        }
+        lines.push('Даты на листе: ' + labels.join(', '));
+        var t = dayShiftKey_(1);
+        lines.push('Завтра (' + dateLabel_(t) + '): ' + describePick_(source.dates, t));
       }
     } catch (e) {
       lines.push('ОШИБКА: ' + e.message);

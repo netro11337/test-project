@@ -41,6 +41,15 @@ function checkSource() {
       } else {
         lines.push('Ошибок в данных не найдено.');
       }
+      if (source.dates.length) {
+        var labels = [];
+        for (var d = 0; d < source.dates.length; d++) {
+          labels.push(dateLabel_(source.dates[d]));
+        }
+        lines.push('Даты на листе: ' + labels.join(', '));
+        var t = dayShiftKey_(1);
+        lines.push('Завтра (' + dateLabel_(t) + '): ' + describePick_(source.dates, t));
+      }
     } catch (e) {
       lines.push('ОШИБКА: ' + e.message);
     }
