@@ -562,6 +562,7 @@ function assertDistinctTemplates_(shops) {
   if (shops.length < 2) return;
 
   var byFolder = {};
+  var names = {};
   var i;
 
   for (i = 0; i < shops.length; i++) {
@@ -569,6 +570,15 @@ function assertDistinctTemplates_(shops) {
       throw new Error('У магазина «' + shops[i].name +
         '» не указана папка с шаблоном (templateFolderId).');
     }
+
+    // По name называются готовые файлы: одинаковые имена — одинаковые файлы
+    var nameKey = normHeader_(shops[i].name);
+    if (names[nameKey]) {
+      throw new Error('Два магазина названы одинаково («' + shops[i].name +
+        '»). Имена должны различаться — по ним называются готовые файлы.');
+    }
+    names[nameKey] = true;
+
     var id = shops[i].templateFolderId;
     if (!byFolder[id]) byFolder[id] = [];
     byFolder[id].push(shops[i]);
