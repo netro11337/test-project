@@ -273,8 +273,8 @@ class OzonRegistrationPanel:
                 email_password = email_data['password']
 
                 # Получаем номер телефона
-                self.log("Получение номера телефона с MegaSMS (Ozончик)...")
-                phone_data = self.sms_service.get_phone_number("ozончик")
+                self.log("Получение номера телефона с MegaSMS (Ozon)...")
+                phone_data = self.sms_service.get_phone_number("ozon")
 
                 if not phone_data:
                     self.log("✗ Не удалось получить номер телефона")

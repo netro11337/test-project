@@ -33,18 +33,28 @@ class MegaSMSService:
         self.headers = {
             "Content-Type": "application/json"
         }
+        self.last_request_time = 0
+        self.min_delay = 0.5
 
-    def get_phone_number(self, service_id: str = "ozончик") -> Optional[Dict]:
+    def _wait_for_rate_limit(self):
+        elapsed = time.time() - self.last_request_time
+        if elapsed < self.min_delay:
+            time.sleep(self.min_delay - elapsed)
+        self.last_request_time = time.time()
+
+    def get_phone_number(self, service_id: str = "ozon") -> Optional[Dict]:
         """
         Получить номер телефона для регистрации
 
         Args:
-            service_id: ID сервиса (по умолчанию 'ozончик')
+            service_id: ID сервиса (по умолчанию 'ozon')
 
         Returns:
             Словарь с номером и ID активации или None при ошибке
         """
         try:
+            self._wait_for_rate_limit()
+
             payload = {
                 "service_id": service_id,
                 "token": self.token
@@ -95,6 +105,8 @@ class MegaSMSService:
             SMS код или None
         """
         try:
+            self._wait_for_rate_limit()
+
             payload = {
                 "order_id": order_id,
                 "token": self.token
@@ -212,6 +224,8 @@ class MegaSMSService:
             Баланс в рублях или None
         """
         try:
+            self._wait_for_rate_limit()
+
             payload = {
                 "token": self.token
             }
