@@ -268,6 +268,50 @@ class CartRunner:
 
         return carts
 
+    def _ensure_clean_start(self, driver, thread_id: int, cart) -> None:
+        """Убеждается, что круг начинается с пустой корзины.
+
+        Очистка после круга может не сработать, а профиль переживает и
+        перезапуск программы. Тогда товары прошлого круга останутся и попадут
+        в ссылку следующего — со стороны это выглядит так, будто поток набрал
+        чужие SKU. Поэтому чистим ещё и на входе.
+        """
+        if not self.cfg.clear_cart_after:
+            return
+
+        if not open_cart(driver, self.cfg, self.cfg.market):
+            return
+        left = count_items(driver, self.cfg.market)
+        if left <= 0:
+            return
+
+        self.emit(
+            Event(
+                EventKind.LOG,
+                thread_id=thread_id,
+                message=(
+                    f"Поток {thread_id}: перед началом в корзине {left} чужих "
+                    "позиц(ий) от прошлого круга — убираю"
+                ),
+            )
+        )
+        ok, why = clear_cart(driver, self.cfg)
+        if ok:
+            return
+
+        cart.error = f"корзина не была пуста в начале ({why})"
+        self.emit(
+            Event(
+                EventKind.LOG,
+                thread_id=thread_id,
+                message=(
+                    f"Поток {thread_id}: ВНИМАНИЕ, очистить корзину перед "
+                    f"началом не удалось ({why}). В ссылку попадут лишние "
+                    "товары — доверять ей нельзя."
+                ),
+            )
+        )
+
     def _verify(self, driver, thread_id: int, skus: List[str], cart) -> None:
         """Перепроверяет каждый товар и дожимает не попавшие в корзину.
 
@@ -442,15 +486,19 @@ class CartRunner:
             url=self.cfg.market.cart_url,
         )
 
+        # Список печатаем целиком: когда в корзине окажется чужой товар, по
+        # логу сразу видно, был он выдан этому потоку или приехал из соседнего.
         self.emit(
             Event(
                 EventKind.THREAD_STARTED,
                 thread_id=thread_id,
-                message=f"Поток {thread_id}: {len(skus)} SKU",
+                message=f"Поток {thread_id}: {len(skus)} SKU — {', '.join(skus)}",
             )
         )
 
         try:
+            self._ensure_clean_start(driver, thread_id, cart)
+
             for sku in skus:
                 if self._cancel.is_set():
                     cart.error = "Отменено пользователем"

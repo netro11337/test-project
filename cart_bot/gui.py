@@ -477,6 +477,7 @@ class CartBotApp(ttk.Frame):
                 return
 
         self.cfg = self._read_settings()
+        self._active_threads = len([b for b in batches if b])
         if self.cfg.attach_to_chrome and not self._chrome_is_listening():
             return
         ensure_app_dir()
@@ -627,6 +628,21 @@ class CartBotApp(ttk.Frame):
         буфер доступен напрямую.
         """
         if cart.share_method != "os_clipboard_pending":
+            return
+
+        if getattr(self, "_active_threads", 1) > 1:
+            # Буфер обмена один на всех: пока мы сюда добрались, ссылку мог
+            # перезаписать другой поток. Чужая ссылка хуже её отсутствия.
+            cart.share_method = "fallback"
+            cart.share_note = (
+                "ссылка осталась в буфере обмена, но потоков несколько — "
+                "какая из них чья, определить нельзя"
+            )
+            self._append_log(
+                f"Поток {cart.thread_id}: ссылку удалось получить только через "
+                "буфер обмена, а потоков несколько — брать её оттуда небезопасно, "
+                "она может оказаться от другого потока."
+            )
             return
 
         host = MARKETS[self.cfg.market_key].base_url.split("://", 1)[-1]

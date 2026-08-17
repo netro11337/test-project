@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -31,6 +32,11 @@ _MODAL_ANCHOR = (
 )
 
 _TRAILING_PUNCT = ".,;:!?"
+
+# Буфер обмена в системе один на всех. Если два потока одновременно жмут
+# «Поделиться», второй прочитает ссылку, которую только что положил первый, —
+# и отдаст чужую корзину. Поэтому весь обмен через буфер строго по очереди.
+_SHARE_LOCK = threading.Lock()
 _SENTINEL = "__cart_bot_no_link__"
 
 
@@ -340,12 +346,16 @@ def find_share_confirm(
 
 
 def _focus_window(driver: WebDriver) -> None:
-    """Возвращает фокус окну: без него чтение буфера обмена отклоняется."""
+    """Возвращает фокус окну: без него чтение буфера обмена отклоняется.
+
+    Шаг вспомогательный, поэтому глушим любую ошибку: не получилось вернуть
+    фокус — это повод не прочитать буфер, но не повод потерять всю ссылку.
+    """
     try:
         driver.switch_to.window(driver.current_window_handle)
         driver.execute_script("window.focus();")
-    except WebDriverException:
-        pass
+    except Exception as exc:  # noqa: BLE001
+        log.debug("Не вернул фокус окну: %s", exc)
 
 
 def _from_clipboard(
@@ -379,6 +389,14 @@ def share_cart(driver: WebDriver, cfg: Settings) -> ShareResult:
         return _fallback(market, "Корзина пуста — делиться нечем")
 
     ensure_all_selected(driver, market)
+
+    # Дальше идёт работа с буфером обмена — только по одному потоку за раз.
+    with _SHARE_LOCK:
+        return _share_locked(driver, cfg, market)
+
+
+def _share_locked(driver: WebDriver, cfg: Settings, market: Market) -> ShareResult:
+    """Часть «Поделиться», завязанная на общий буфер обмена."""
     _grant_clipboard(driver, market)
     _prime_clipboard(driver)
 
