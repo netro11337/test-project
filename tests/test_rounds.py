@@ -15,6 +15,7 @@ class RoundsTest(unittest.TestCase):
             runner_module.quit_driver,
             runner_module.warm_up,
             runner_module.probe_debug_ports,
+            runner_module.launch_user_browsers,
         )
         runner_module.create_driver = lambda *a, **k: object()
         runner_module.quit_driver = lambda *a, **k: None
@@ -22,6 +23,10 @@ class RoundsTest(unittest.TestCase):
         # По умолчанию считаем, что запущен один браузер пользователя.
         self.browsers = ["127.0.0.1:9222"]
         runner_module.probe_debug_ports = lambda cfg, wanted: list(self.browsers)
+        # Программа сама открывает браузеры; в тесте считаем, что они уже есть.
+        runner_module.launch_user_browsers = (
+            lambda cfg, wanted, note=None: list(self.browsers)
+        )
 
     def tearDown(self):
         (
@@ -29,6 +34,7 @@ class RoundsTest(unittest.TestCase):
             runner_module.quit_driver,
             runner_module.warm_up,
             runner_module.probe_debug_ports,
+            runner_module.launch_user_browsers,
         ) = self._saved
 
     def _runner(self, batches, **overrides):
@@ -115,13 +121,15 @@ class MultipleBrowsersTest(RoundsTest):
         self.assertIn("Браузер 127.0.0.1:9222: вкладки 1, 3", spread)
         self.assertIn("Браузер 127.0.0.1:9223: вкладки 2", spread)
 
-    def test_no_browser_running_is_reported(self):
+    def test_no_browser_could_be_opened_is_reported(self):
+        # Chrome не нашёлся и поднять окна не вышло — молчать об этом нельзя.
         self.browsers = []
         runner, events = self._runner([["1" * 9]])
         carts = runner.run()
         self.assertEqual(carts, [])
         self.assertTrue(
-            any("Ни один браузер не отвечает" in e.message for e in events)
+            any("Не удалось открыть ни одного браузера" in e.message for e in events),
+            [e.message for e in events],
         )
 
 if __name__ == "__main__":

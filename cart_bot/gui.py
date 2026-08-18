@@ -14,7 +14,7 @@ from . import __version__
 from .clipboard import enable_clipboard_hotkeys
 from .config import Settings, ensure_app_dir
 from .markets import DEFAULT_MARKET, MARKETS
-from .driver import probe_debug_ports
+from .driver import find_chrome, probe_debug_ports
 from .runner import (
     CartResult,
     CartRunner,
@@ -88,6 +88,7 @@ class CartBotApp(ttk.Frame):
         self.pace_var = tk.BooleanVar(value=False)
         self.clear_var = tk.BooleanVar(value=True)
         self.stealth_var = tk.BooleanVar(value=False)
+        self.incognito_var = tk.BooleanVar(value=False)
 
         # Маркетплейс выбирается на весь запуск: все потоки идут в один магазин.
         market_row = ttk.Frame(box)
@@ -211,7 +212,32 @@ class CartBotApp(ttk.Frame):
             text="Подмена отпечатка",
             variable=self.stealth_var,
             command=self._on_stealth_change,
+        ).pack(side="left", padx=(0, 16))
+        ttk.Checkbutton(
+            attach_row,
+            text="Инкогнито",
+            variable=self.incognito_var,
+            command=self._on_incognito_change,
         ).pack(side="left")
+
+    def _on_incognito_change(self) -> None:
+        if not self.incognito_var.get():
+            self._append_log("Инкогнито выключено.")
+            return
+        if self.attach_var.get():
+            self._append_log(
+                "Инкогнито здесь не действует: браузеры уже запущены. Чтобы "
+                "они были анонимными, ответьте «д» на вопрос про инкогнито "
+                "в «Chrome с отладкой.bat»."
+            )
+            return
+        self._append_log(
+            "Инкогнито включено: у каждого потока своя анонимная корзина, "
+            "потому что вход в аккаунт делает корзину общей на сервере "
+            "магазина. Обратная сторона — нет истории и входа, и антибот "
+            "придирается чаще. Кнопка «Открыть корзину» покажет пустую: "
+            "анонимная сессия не переживает закрытие браузера."
+        )
 
     def _on_stealth_change(self) -> None:
         if not self.stealth_var.get():
@@ -231,9 +257,9 @@ class CartBotApp(ttk.Frame):
     def _on_attach_change(self) -> None:
         if self.attach_var.get():
             self._append_log(
-                "Режим «мой Chrome»: сколько браузеров запущено, столько "
-                "вкладок идёт параллельно; остальные — вторым кругом. Галки "
-                "Headless и «Без картинок» не действуют."
+                "Режим «мой Chrome»: программа сама откроет столько окон, "
+                "сколько задано потоков, и они пойдут параллельно. Галки "
+                "Headless и «Без картинок» здесь не действуют."
             )
         else:
             self._append_log("Вернулся к собственным профилям браузера.")
@@ -454,6 +480,7 @@ class CartBotApp(ttk.Frame):
         cfg.human_pace = bool(self.pace_var.get())
         cfg.clear_cart_after = bool(self.clear_var.get())
         cfg.stealth = bool(self.stealth_var.get())
+        cfg.incognito = bool(self.incognito_var.get())
         # В режиме «мой Chrome» параллельность задаётся числом запущенных
         # браузеров, а не этой настройкой: раннер сам их пересчитывает.
         return cfg
@@ -478,7 +505,7 @@ class CartBotApp(ttk.Frame):
 
         self.cfg = self._read_settings()
         self._active_threads = len([b for b in batches if b])
-        if self.cfg.attach_to_chrome and not self._chrome_is_listening():
+        if self.cfg.attach_to_chrome and not self._browsers_ready():
             return
         ensure_app_dir()
         self.carts.clear()
@@ -504,32 +531,39 @@ class CartBotApp(ttk.Frame):
         self.run_thread = threading.Thread(target=self.runner.run, daemon=True)
         self.run_thread.start()
 
-    def _chrome_is_listening(self) -> bool:
-        """Проверяет, запущен ли Chrome с открытым портом отладки.
-
-        Без этой проверки пользователь получил бы длинную ошибку Selenium
-        вместо понятного «браузер не запущен».
-        """
+    def _browsers_ready(self) -> bool:
+        """Проверяет браузеры перед стартом. Недостающие поднимет сам раннер."""
         wanted = len([batch for batch in self._collect_batches() if batch])
         alive = probe_debug_ports(self.cfg, wanted)
+
+        if self.cfg.auto_launch_browsers:
+            if len(alive) < wanted:
+                self._append_log(
+                    f"Браузеров запущено: {len(alive)} из {wanted} — "
+                    "недостающие открою сам."
+                )
+            if find_chrome() is None:
+                messagebox.showerror(
+                    "Chrome не найден",
+                    "Не нашёл установленный Google Chrome, поэтому открыть "
+                    "браузеры не смогу.\n\nУстановите Chrome либо запустите "
+                    "окна вручную через «Chrome с отладкой.bat».",
+                )
+                return False
+            return True
+
         if not alive:
             messagebox.showerror(
-                "Chrome не найден",
-                f"По адресу {self.cfg.debug_address} никто не отвечает.\n\n"
-                "Запустите «Chrome с отладкой.bat» и не закрывайте окна "
-                "браузера, затем повторите.\n\n"
-                "Подробности — кнопка «Как запустить?».",
+                "Chrome не запущен",
+                f"По адресу {self.cfg.debug_address} никто не отвечает, а "
+                "автозапуск выключен.\n\nЗапустите «Chrome с отладкой.bat» "
+                "или включите автозапуск.",
             )
             return False
 
         self._append_log(
             f"Браузеров запущено: {len(alive)}, вкладок с товарами: {wanted}."
         )
-        if len(alive) < wanted:
-            self._append_log(
-                f"Вкладок больше, чем браузеров: лишние пойдут вторым кругом. "
-                f"Чтобы шли параллельно, запустите {wanted} браузер(ов)."
-            )
         return True
 
     def _cancel(self) -> None:

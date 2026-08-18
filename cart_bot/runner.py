@@ -25,6 +25,7 @@ from .driver import (
     DRIVER_CACHE_HINT,
     apply_resource_blocking,
     driver_ready,
+    launch_user_browsers,
     probe_debug_ports,
     clear_resource_blocking,
     create_driver,
@@ -171,15 +172,22 @@ class CartRunner:
         тогда они работают параллельно. Вкладки сверх их числа достаются тем же
         браузерам вторым кругом: два браузера на пять вкладок лучше, чем отказ.
         """
-        addresses = probe_debug_ports(self.cfg, len(active))
+        def note(message: str) -> None:
+            self.emit(Event(EventKind.LOG, message=message))
+
+        if self.cfg.auto_launch_browsers:
+            addresses = launch_user_browsers(self.cfg, len(active), note)
+        else:
+            addresses = probe_debug_ports(self.cfg, len(active))
+
         if not addresses:
             self.emit(
                 Event(
                     EventKind.THREAD_FAILED,
                     message=(
-                        f"Ни один браузер не отвечает по адресу "
-                        f"{self.cfg.debug_address}. Запустите «Chrome с "
-                        "отладкой.bat»."
+                        "Не удалось открыть ни одного браузера. Проверьте, что "
+                        "установлен Google Chrome; как запасной путь — "
+                        "запустите «Chrome с отладкой.bat» вручную."
                     ),
                 )
             )

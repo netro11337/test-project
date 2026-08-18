@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -32,6 +33,11 @@ def _build_options(
     # Каждый поток — свой профиль, то есть своя сессия и своя корзина.
     profile_dir.mkdir(parents=True, exist_ok=True)
     opts.add_argument(f"--user-data-dir={profile_dir}")
+
+    if cfg.incognito:
+        # Без входа в аккаунт корзина живёт в самой сессии окна, а не на
+        # сервере магазина, — значит у каждого потока она своя.
+        opts.add_argument("--incognito")
 
     # eager: не ждём картинки и «хвост» загрузки — DOM готов, можно кликать.
     opts.page_load_strategy = "eager"
@@ -190,23 +196,114 @@ def driver_ready() -> Optional[str]:
     return _driver_path()
 
 
+_CHROME_CANDIDATES = (
+    # Windows
+    r"%ProgramFiles%\Google\Chrome\Application\chrome.exe",
+    r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe",
+    r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe",
+    # macOS
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+)
+
+
+def find_chrome() -> Optional[str]:
+    """Путь к установленному Chrome."""
+    import os
+    import shutil
+
+    for name in ("google-chrome", "chrome", "chromium", "chromium-browser"):
+        found = shutil.which(name)
+        if found:
+            return found
+    for candidate in _CHROME_CANDIDATES:
+        path = Path(os.path.expandvars(candidate))
+        if path.exists():
+            return str(path)
+    return None
+
+
+def user_browser_profile(cfg: Settings, index: int) -> Path:
+    """Профиль для браузера, который программа поднимает сама."""
+    return cfg.profiles_dir / "user-chrome" / f"browser-{index}"
+
+
+def launch_user_browsers(cfg: Settings, wanted: int, log_line=None) -> list:
+    """Поднимает недостающие браузеры с портом отладки и ждёт их готовности.
+
+    Раньше это делал батник вручную. Программа знает, сколько потоков задано,
+    поэтому может открыть ровно столько окон сама.
+    """
+    chrome = find_chrome()
+    if chrome is None:
+        if log_line:
+            log_line("Не нашёл Chrome — запустите браузеры вручную батником.")
+        return probe_debug_ports(cfg, wanted)
+
+    import subprocess
+
+    started = 0
+    for index in range(1, wanted + 1):
+        address = cfg.debug_address_for(index)
+        if _port_alive(address):
+            continue
+        profile = user_browser_profile(cfg, index)
+        profile.mkdir(parents=True, exist_ok=True)
+        command = [
+            chrome,
+            f"--remote-debugging-port={address.rpartition(':')[2]}",
+            f"--user-data-dir={profile}",
+            "--no-first-run",
+            "--no-default-browser-check",
+        ]
+        if cfg.incognito:
+            command.append("--incognito")
+        command.append(cfg.market.base_url)
+        try:
+            subprocess.Popen(
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            started += 1
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Не запустил браузер %s: %s", index, exc)
+
+    if started and log_line:
+        log_line(f"Открываю браузеров: {started}, жду готовности…")
+
+    # Chrome поднимает порт не мгновенно, особенно когда окон несколько.
+    deadline = time.monotonic() + 5.0 + 3.0 * started
+    while time.monotonic() < deadline:
+        alive = probe_debug_ports(cfg, wanted)
+        if len(alive) >= wanted:
+            return alive
+        time.sleep(0.5)
+    return probe_debug_ports(cfg, wanted)
+
+
+def _port_alive(address: str) -> bool:
+    import socket
+
+    host, _, port = address.partition(":")
+    try:
+        with socket.create_connection((host, int(port)), 1.0):
+            return True
+    except (OSError, ValueError):
+        return False
+
+
 def probe_debug_ports(cfg: Settings, wanted: int) -> list:
     """Какие браузеры пользователя реально запущены.
 
     Проверяем подряд идущие порты и берём столько, сколько отвечает: лучше
     работать двумя браузерами из трёх, чем упасть на первом же отсутствующем.
     """
-    import socket
-
     alive = []
     for index in range(1, max(1, wanted) + 1):
         address = cfg.debug_address_for(index)
-        host, _, port = address.partition(":")
-        try:
-            with socket.create_connection((host, int(port)), 1.0):
-                alive.append(address)
-        except (OSError, ValueError):
+        if not _port_alive(address):
             break
+        alive.append(address)
     return alive
 
 
