@@ -35,6 +35,7 @@ from .worker import (
     Outcome,
     SkuResult,
     add_sku_with_retry,
+    session_is_anonymous,
     warm_up,
     wait_until_unblocked,
 )
@@ -109,6 +110,10 @@ class CartRunner:
         self.batches = [list(batch) for batch in batches]
         self.emit = emit
         self._cancel = threading.Event()
+        # Состояния сессий браузеров: залогинен или нет. Нужно, чтобы поймать
+        # общую корзину до того, как она смешает товары.
+        self._sessions: List[bool] = []
+        self._sessions_lock = threading.Lock()
 
     def cancel(self) -> None:
         self._cancel.set()
@@ -272,6 +277,8 @@ class CartRunner:
             if self.cfg.warm_up and not warm_up(driver, self.cfg):
                 self._survive_block(driver, active[0][0])
 
+            self._note_session(driver, address)
+
             for number, (thread_id, skus) in enumerate(active, start=1):
                 if self._cancel.is_set():
                     break
@@ -408,6 +415,48 @@ class CartRunner:
                 ),
             )
         )
+
+    def _note_session(self, driver, address: str) -> None:
+        """Запоминает, выполнен ли в окне вход, и предупреждает об общей корзине.
+
+        Корзина магазина живёт на сервере и привязана к аккаунту. Два окна с
+        одним логином — это одна корзина, и параллельные потоки смешают в ней
+        товары. Анонимные профили таких проблем не имеют: у каждого своя
+        корзина в своих куках.
+        """
+        anonymous = session_is_anonymous(driver, self.cfg.market)
+        if anonymous is None:
+            return
+
+        self.emit(
+            Event(
+                EventKind.LOG,
+                message=(
+                    f"Браузер {address}: "
+                    + ("вход не выполнен" if anonymous else "выполнен вход в аккаунт")
+                ),
+            )
+        )
+
+        with self._sessions_lock:
+            self._sessions.append(anonymous)
+            signed_in = self._sessions.count(False)
+            first_warning = signed_in == 2
+
+        if first_warning:
+            self.emit(
+                Event(
+                    EventKind.LOG,
+                    message=(
+                        "ВНИМАНИЕ: вход выполнен более чем в одном окне. "
+                        "Корзина магазина привязана к аккаунту, а не к окну, "
+                        "поэтому у этих окон она общая и потоки смешают "
+                        "товары. Чтобы собирать параллельно, выйдите из "
+                        "аккаунта в окнах (профили и куки сохранятся) либо "
+                        "поставьте «Браузеров» = 1."
+                    ),
+                )
+            )
 
     def _pace(self) -> None:
         """Пауза вразнобой между товарами в человеческом темпе.

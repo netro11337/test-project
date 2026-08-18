@@ -168,18 +168,25 @@ def _new_chrome(options: Options) -> webdriver.Chrome:
     секунды на фоне всей сборки.
     """
     with _DRIVER_LOCK:
-        service = _resolve_service()
-        try:
-            if service is not None:
-                return webdriver.Chrome(service=service, options=options)
-            return webdriver.Chrome(options=options)
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(
-                "Не удалось запустить Chrome. Проверьте, что браузер установлен "
-                "и есть доступ в интернет для загрузки драйвера. "
-                + DRIVER_CACHE_HINT
-                + f" Исходная ошибка: {str(exc).splitlines()[0]}"
-            ) from exc
+        last: Optional[Exception] = None
+        # Вторая попытка: разовый сбой запуска (порт занят, окно не успело
+        # подняться) не должен стоить целого потока.
+        for attempt in (1, 2):
+            service = _resolve_service()
+            try:
+                if service is not None:
+                    return webdriver.Chrome(service=service, options=options)
+                return webdriver.Chrome(options=options)
+            except Exception as exc:  # noqa: BLE001
+                last = exc
+                log.warning("Попытка %s запустить Chrome не удалась: %s", attempt, exc)
+                time.sleep(1.0)
+        raise RuntimeError(
+            "Не удалось запустить Chrome. Проверьте, что браузер установлен "
+            "и есть доступ в интернет для загрузки драйвера. "
+            + DRIVER_CACHE_HINT
+            + f" Исходная ошибка: {str(last).splitlines()[0]}"
+        ) from last
 
 
 def driver_ready() -> Optional[str]:

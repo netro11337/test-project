@@ -288,6 +288,27 @@ def add_sku(driver: WebDriver, sku: str, cfg: Settings) -> SkuResult:
     )
 
 
+def session_is_anonymous(driver: WebDriver, market: Market) -> Optional[bool]:
+    """Вошли ли в аккаунт. None — определить не вышло.
+
+    Это ключ к параллельной сборке: корзина магазина привязана к аккаунту, и
+    несколько окон с одним логином делят одну корзину на всех. Анонимные
+    профили этой беды лишены — у каждого своя корзина в своих куках.
+    """
+    # Это диагностика, а не работа: любая её ошибка не должна стоить сборки.
+    try:
+        found = driver.find_elements(By.XPATH, market.signin_marker)
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        for element in found:
+            if element.is_displayed():
+                return True
+    except Exception:  # noqa: BLE001
+        return None
+    return False
+
+
 def warm_up(driver: WebDriver, cfg: Settings) -> bool:
     """Заходит на главную перед первым товаром.
 
