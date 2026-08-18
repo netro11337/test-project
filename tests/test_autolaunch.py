@@ -63,14 +63,6 @@ class AutoLaunchTest(unittest.TestCase):
         ]
         self.assertEqual(len(set(profiles)), 2, "окна делят один профиль")
 
-    def test_incognito_is_passed_through(self):
-        launch_user_browsers(Settings(incognito=True), 1)
-        self.assertIn("--incognito", self.commands[0])
-
-    def test_no_incognito_by_default(self):
-        launch_user_browsers(Settings(), 1)
-        self.assertNotIn("--incognito", self.commands[0])
-
     def test_missing_chrome_does_not_crash(self):
         driver_module.find_chrome = lambda: None
         driver_module.probe_debug_ports = lambda cfg, wanted: []
@@ -83,9 +75,11 @@ class AutoLaunchTest(unittest.TestCase):
         self.assertNotEqual(user_browser_profile(cfg, 1), cfg.profile_for(1))
 
 
-class IncognitoSettingTest(unittest.TestCase):
-    def test_off_by_default(self):
-        self.assertFalse(Settings().incognito)
+class BrowserCountTest(unittest.TestCase):
+    def test_one_browser_by_default(self):
+        # Один аккаунт — одна корзина на сервере, поэтому по умолчанию одно
+        # окно и круги: так корзины не смешиваются.
+        self.assertEqual(Settings().browser_count, 1)
 
     def test_auto_launch_on_by_default(self):
         self.assertTrue(Settings().auto_launch_browsers)

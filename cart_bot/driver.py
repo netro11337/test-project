@@ -34,11 +34,6 @@ def _build_options(
     profile_dir.mkdir(parents=True, exist_ok=True)
     opts.add_argument(f"--user-data-dir={profile_dir}")
 
-    if cfg.incognito:
-        # Без входа в аккаунт корзина живёт в самой сессии окна, а не на
-        # сервере магазина, — значит у каждого потока она своя.
-        opts.add_argument("--incognito")
-
     # eager: не ждём картинки и «хвост» загрузки — DOM готов, можно кликать.
     opts.page_load_strategy = "eager"
 
@@ -255,8 +250,6 @@ def launch_user_browsers(cfg: Settings, wanted: int, log_line=None) -> list:
             "--no-first-run",
             "--no-default-browser-check",
         ]
-        if cfg.incognito:
-            command.append("--incognito")
         command.append(cfg.market.base_url)
         try:
             subprocess.Popen(

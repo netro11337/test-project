@@ -88,7 +88,7 @@ class CartBotApp(ttk.Frame):
         self.pace_var = tk.BooleanVar(value=False)
         self.clear_var = tk.BooleanVar(value=True)
         self.stealth_var = tk.BooleanVar(value=False)
-        self.incognito_var = tk.BooleanVar(value=False)
+        self.browsers_var = tk.IntVar(value=1)
 
         # Маркетплейс выбирается на весь запуск: все потоки идут в один магазин.
         market_row = ttk.Frame(box)
@@ -213,31 +213,10 @@ class CartBotApp(ttk.Frame):
             variable=self.stealth_var,
             command=self._on_stealth_change,
         ).pack(side="left", padx=(0, 16))
-        ttk.Checkbutton(
-            attach_row,
-            text="Инкогнито",
-            variable=self.incognito_var,
-            command=self._on_incognito_change,
+        ttk.Label(attach_row, text="Браузеров:").pack(side="left", padx=(16, 4))
+        ttk.Spinbox(
+            attach_row, from_=1, to=MAX_THREADS, width=4, textvariable=self.browsers_var
         ).pack(side="left")
-
-    def _on_incognito_change(self) -> None:
-        if not self.incognito_var.get():
-            self._append_log("Инкогнито выключено.")
-            return
-        if self.attach_var.get():
-            self._append_log(
-                "Инкогнито здесь не действует: браузеры уже запущены. Чтобы "
-                "они были анонимными, ответьте «д» на вопрос про инкогнито "
-                "в «Chrome с отладкой.bat»."
-            )
-            return
-        self._append_log(
-            "Инкогнито включено: у каждого потока своя анонимная корзина, "
-            "потому что вход в аккаунт делает корзину общей на сервере "
-            "магазина. Обратная сторона — нет истории и входа, и антибот "
-            "придирается чаще. Кнопка «Открыть корзину» покажет пустую: "
-            "анонимная сессия не переживает закрытие браузера."
-        )
 
     def _on_stealth_change(self) -> None:
         if not self.stealth_var.get():
@@ -257,9 +236,10 @@ class CartBotApp(ttk.Frame):
     def _on_attach_change(self) -> None:
         if self.attach_var.get():
             self._append_log(
-                "Режим «мой Chrome»: программа сама откроет столько окон, "
-                "сколько задано потоков, и они пойдут параллельно. Галки "
-                "Headless и «Без картинок» здесь не действуют."
+                "Режим «мой Chrome»: программа сама откроет окна (сколько — "
+                "задаётся полем «Браузеров»). Если их меньше, чем потоков, "
+                "корзины пойдут по очереди. Галки Headless и «Без картинок» "
+                "здесь не действуют."
             )
         else:
             self._append_log("Вернулся к собственным профилям браузера.")
@@ -480,7 +460,7 @@ class CartBotApp(ttk.Frame):
         cfg.human_pace = bool(self.pace_var.get())
         cfg.clear_cart_after = bool(self.clear_var.get())
         cfg.stealth = bool(self.stealth_var.get())
-        cfg.incognito = bool(self.incognito_var.get())
+        cfg.browser_count = max(1, int(self.browsers_var.get()))
         # В режиме «мой Chrome» параллельность задаётся числом запущенных
         # браузеров, а не этой настройкой: раннер сам их пересчитывает.
         return cfg

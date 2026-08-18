@@ -132,5 +132,50 @@ class MultipleBrowsersTest(RoundsTest):
             [e.message for e in events],
         )
 
+
+
+class BrowserCountTest(RoundsTest):
+    """Число окон задаётся отдельно от числа потоков."""
+
+    def _runner_with(self, batches, browsers_open, browser_count):
+        self.browsers = browsers_open
+        return self._runner(batches, browser_count=browser_count)
+
+    def test_one_browser_runs_carts_one_after_another(self):
+        # То, ради чего это и нужно: один аккаунт, корзины по очереди.
+        runner, events = self._runner_with(
+            [["1" * 9], ["2" * 9], ["3" * 9]], ["127.0.0.1:9222"], 1
+        )
+        carts = runner.run()
+        self.assertEqual([tid for tid, _ in self.collected], [1, 2, 3])
+        self.assertEqual(len(carts), 3, "должно получиться три отдельные корзины")
+        self.assertTrue(
+            any("кругами" in e.message for e in events),
+            [e.message for e in events],
+        )
+
+    def test_browser_count_limits_parallelism(self):
+        self.browsers = ["127.0.0.1:9222", "127.0.0.1:9223", "127.0.0.1:9224"]
+        asked = []
+        import cart_bot.runner as rm
+
+        rm.launch_user_browsers = lambda cfg, wanted, note=None: (
+            asked.append(wanted) or self.browsers[:wanted]
+        )
+        runner, _ = self._runner([["1" * 9], ["2" * 9], ["3" * 9]], browser_count=2)
+        runner.run()
+        self.assertEqual(asked, [2], "запрошено не то число окон")
+
+    def test_never_opens_more_windows_than_tabs(self):
+        asked = []
+        import cart_bot.runner as rm
+
+        rm.launch_user_browsers = lambda cfg, wanted, note=None: (
+            asked.append(wanted) or ["127.0.0.1:9222"]
+        )
+        runner, _ = self._runner([["1" * 9]], browser_count=5)
+        runner.run()
+        self.assertEqual(asked, [1], "открыл лишние окна под одну вкладку")
+
 if __name__ == "__main__":
     unittest.main()

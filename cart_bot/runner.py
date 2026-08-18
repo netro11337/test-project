@@ -175,10 +175,12 @@ class CartRunner:
         def note(message: str) -> None:
             self.emit(Event(EventKind.LOG, message=message))
 
+        # Больше окон, чем вкладок, не нужно; меньше — вкладки пойдут кругами.
+        wanted = max(1, min(self.cfg.browser_count, len(active)))
         if self.cfg.auto_launch_browsers:
-            addresses = launch_user_browsers(self.cfg, len(active), note)
+            addresses = launch_user_browsers(self.cfg, wanted, note)
         else:
-            addresses = probe_debug_ports(self.cfg, len(active))
+            addresses = probe_debug_ports(self.cfg, wanted)
 
         if not addresses:
             self.emit(
@@ -202,11 +204,12 @@ class CartRunner:
             Event(
                 EventKind.LOG,
                 message=(
-                    f"Нашёл браузеров: {len(addresses)}, вкладок: {len(active)}. "
+                    f"Браузеров: {len(addresses)}, вкладок: {len(active)}. "
                     + (
                         "Каждой вкладке свой браузер."
                         if len(addresses) >= len(active)
-                        else "Лишние вкладки пойдут вторым кругом."
+                        else "Вкладки пойдут кругами: корзина за корзиной, "
+                        "с очисткой между ними."
                     )
                 ),
             )
