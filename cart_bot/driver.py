@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -71,15 +72,122 @@ def _build_options(
     return opts
 
 
-def _resolve_service() -> Optional[Service]:
-    """webdriver-manager, если он есть; иначе штатный Selenium Manager."""
+# Драйвер определяем один раз на всю программу. Раньше каждый поток запускал
+# установку сам, и при параллельном старте они дрались за один кэш: часть
+# потоков падала с «Unable to obtain driver for chrome».
+_DRIVER_LOCK = threading.Lock()
+_DRIVER_PATH: Optional[str] = None
+_DRIVER_RESOLVED = False
+
+
+def _driver_path() -> Optional[str]:
+    """Путь к chromedriver. Скачивается один раз, дальше берётся из памяти."""
+    global _DRIVER_PATH, _DRIVER_RESOLVED
+    if _DRIVER_RESOLVED:
+        return _DRIVER_PATH
+
+    with _DRIVER_LOCK:
+        if _DRIVER_RESOLVED:
+            return _DRIVER_PATH
+        _DRIVER_PATH = _download_driver() or _cached_driver() or _driver_on_path()
+        if _DRIVER_PATH:
+            log.info("Драйвер Chrome: %s", _DRIVER_PATH)
+        _DRIVER_RESOLVED = True
+    return _DRIVER_PATH
+
+
+def _download_driver() -> Optional[str]:
+    """Штатный путь: webdriver-manager сам скачает нужную версию."""
     try:
         from webdriver_manager.chrome import ChromeDriverManager
 
-        return Service(ChromeDriverManager().install())
+        return ChromeDriverManager().install()
     except Exception as exc:  # noqa: BLE001 - деградируем, а не падаем
-        log.debug("webdriver-manager недоступен (%s), беру Selenium Manager", exc)
+        log.warning("webdriver-manager не отработал: %s", exc)
         return None
+
+
+def _cached_driver() -> Optional[str]:
+    """Ищет уже скачанный chromedriver в кэше webdriver-manager.
+
+    Кэш может побиться — например, если несколько потоков качали в него
+    одновременно. Сам менеджер тогда падает, но рабочий файл рядом обычно
+    остаётся, и второй раз качать его незачем.
+    """
+    cache = Path.home() / ".wdm" / "drivers" / "chromedriver"
+    if not cache.exists():
+        return None
+    names = ("chromedriver.exe", "chromedriver")
+    found = [
+        path
+        for name in names
+        for path in cache.rglob(name)
+        if path.is_file() and path.stat().st_size > 0
+    ]
+    if not found:
+        return None
+    # Свежайший по времени: он соответствует последней версии браузера.
+    newest = max(found, key=lambda path: path.stat().st_mtime)
+    log.info("Взял драйвер из кэша: %s", newest)
+    return str(newest)
+
+
+def _driver_on_path() -> Optional[str]:
+    """chromedriver, установленный в системе вручную."""
+    import shutil
+
+    found = shutil.which("chromedriver") or shutil.which("chromedriver.exe")
+    if found:
+        log.info("Взял chromedriver из PATH: %s", found)
+    return found
+
+
+DRIVER_CACHE_HINT = (
+    "Если ошибка повторяется, удалите папку с кэшем драйверов "
+    "%USERPROFILE%\\.wdm (в проводнике: введите %USERPROFILE% в адресную "
+    "строку и удалите папку .wdm) и запустите программу заново."
+)
+
+
+def _resolve_service() -> Optional[Service]:
+    """Свой Service на каждый драйвер, но с общим путём к chromedriver.
+
+    Один Service нельзя переиспользовать для нескольких браузеров — он держит
+    свой процесс, — а вот путь к файлу общий, и искать его повторно незачем.
+    """
+    path = _driver_path()
+    return Service(path) if path else None
+
+
+def _new_chrome(options: Options) -> webdriver.Chrome:
+    """Поднимает браузер. Запуски сериализованы.
+
+    Одновременный старт нескольких chromedriver время от времени заканчивается
+    ошибкой получения драйвера, а выигрыш от параллельного старта — доли
+    секунды на фоне всей сборки.
+    """
+    with _DRIVER_LOCK:
+        service = _resolve_service()
+        try:
+            if service is not None:
+                return webdriver.Chrome(service=service, options=options)
+            return webdriver.Chrome(options=options)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                "Не удалось запустить Chrome. Проверьте, что браузер установлен "
+                "и есть доступ в интернет для загрузки драйвера. "
+                + DRIVER_CACHE_HINT
+                + f" Исходная ошибка: {str(exc).splitlines()[0]}"
+            ) from exc
+
+
+def driver_ready() -> Optional[str]:
+    """Готовит драйвер заранее, до запуска потоков.
+
+    Так загрузка происходит один раз и до параллельной работы, а проблема
+    видна одной понятной строкой, а не пятью одинаковыми падениями подряд.
+    """
+    return _driver_path()
 
 
 def probe_debug_ports(cfg: Settings, wanted: int) -> list:
@@ -114,12 +222,7 @@ def attach_driver(cfg: Settings, address: Optional[str] = None) -> webdriver.Chr
     options.debugger_address = address or cfg.debug_address
     options.page_load_strategy = "eager"
 
-    service = _resolve_service()
-    driver = (
-        webdriver.Chrome(service=service, options=options)
-        if service is not None
-        else webdriver.Chrome(options=options)
-    )
+    driver = _new_chrome(options)
     driver.set_page_load_timeout(cfg.page_load_timeout)
     driver.set_script_timeout(cfg.page_load_timeout)
     return driver
@@ -140,12 +243,7 @@ def create_driver(
     fingerprint = stealth_fingerprint(cfg, thread_id)
     options = _build_options(cfg, profile_dir, use_headless, fingerprint)
 
-    service = _resolve_service()
-    driver = (
-        webdriver.Chrome(service=service, options=options)
-        if service is not None
-        else webdriver.Chrome(options=options)
-    )
+    driver = _new_chrome(options)
 
     driver.set_page_load_timeout(cfg.page_load_timeout)
     driver.set_script_timeout(cfg.page_load_timeout)

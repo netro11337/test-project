@@ -22,7 +22,9 @@ from .cart import (
 )
 from .config import Settings, ensure_app_dir
 from .driver import (
+    DRIVER_CACHE_HINT,
     apply_resource_blocking,
+    driver_ready,
     probe_debug_ports,
     clear_resource_blocking,
     create_driver,
@@ -120,6 +122,18 @@ class CartRunner:
         if not active:
             self.emit(Event(EventKind.ALL_DONE, message="Нет SKU для сборки"))
             return []
+
+        if driver_ready() is None:
+            self.emit(
+                Event(
+                    EventKind.LOG,
+                    message=(
+                        "Готовый chromedriver не найден — понадеюсь на "
+                        "встроенный механизм Selenium. Если браузеры не "
+                        "запустятся: " + DRIVER_CACHE_HINT
+                    ),
+                )
+            )
 
         if self.cfg.attach_to_chrome:
             return self._run_attached(active)
