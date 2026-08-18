@@ -548,7 +548,31 @@ class CartRunner:
                 share, cart.items_in_cart = read_cart_summary(driver, self.cfg)
                 cart.apply_share(share)
 
-                if cart.added > 0 and cart.items_in_cart == 0:
+                if cart.items_in_cart > len(skus):
+                    # Товаров больше, чем выдано потоку. Чаще всего это значит,
+                    # что браузеры вошли в один аккаунт: корзина магазина
+                    # привязана к аккаунту, а не к профилю браузера, и потоки
+                    # складывают всё в одну общую.
+                    extra = cart.items_in_cart - len(skus)
+                    cart.error = (
+                        f"в корзине {cart.items_in_cart} позиций против "
+                        f"{len(skus)} выданных (+{extra} чужих)"
+                    )
+                    self.emit(
+                        Event(
+                            EventKind.LOG,
+                            thread_id=thread_id,
+                            message=(
+                                f"Поток {thread_id}: ВНИМАНИЕ, {cart.error}. "
+                                "Вероятная причина: браузеры вошли в один "
+                                "аккаунт, а корзина привязана к аккаунту, "
+                                "а не к браузеру — тогда она у всех общая. "
+                                "Либо разные аккаунты в разных браузерах, "
+                                "либо один поток за раз."
+                            ),
+                        )
+                    )
+                elif cart.added > 0 and cart.items_in_cart == 0:
                     # Отчитались об успехе, а корзина пуста: значит клики не
                     # дошли. Молчать об этом нельзя — человек будет уверен,
                     # что корзина собрана.
