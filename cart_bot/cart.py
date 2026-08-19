@@ -320,6 +320,28 @@ def _from_modal(
     return None
 
 
+def _wait_for_dialog(driver: WebDriver, market: Market, timeout: float) -> bool:
+    """Ждёт появления окна «Поделиться»."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _find_first(driver, market.share_dialog) is not None:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def _count_shareish(driver: WebDriver, market: Market) -> int:
+    """Сколько кнопок, похожих на «Поделиться», видно сейчас."""
+    seen = set()
+    for xpath in market.share_confirm:
+        try:
+            for element in _visible(driver.find_elements(By.XPATH, xpath)):
+                seen.add(element)
+        except WebDriverException:
+            continue
+    return len(seen)
+
+
 def find_share_confirm(
     driver: WebDriver, market: Market, avoid, timeout: float
 ) -> Tuple[Optional[WebElement], str]:
@@ -416,10 +438,17 @@ def _share_locked(driver: WebDriver, cfg: Settings, market: Market) -> ShareResu
 
     time.sleep(cfg.micro_pause)
 
-    # Второй шаг: в открывшемся окне со списком товаров есть своя кнопка
-    # «Поделиться», и только она создаёт ссылку.
+    # Окно открывается не мгновенно. Если его нет — жмём ещё раз: первый клик
+    # мог уйти в кнопку, к которой обработчик ещё не привязался.
+    if not _wait_for_dialog(driver, market, cfg.element_timeout):
+        log.debug("Окно «Поделиться» не появилось, повторяю клик")
+        _click(driver, button)
+        _wait_for_dialog(driver, market, cfg.element_timeout)
+
+    # Второй шаг: в открывшемся окне со списком товаров есть своя кнопка,
+    # и только она создаёт ссылку.
     confirm, confirm_selector = find_share_confirm(
-        driver, market, button, min(3.0, cfg.element_timeout)
+        driver, market, button, cfg.element_timeout
     )
     if confirm is not None:
         if _click(driver, confirm):
@@ -427,6 +456,11 @@ def _share_locked(driver: WebDriver, cfg: Settings, market: Market) -> ShareResu
             time.sleep(cfg.micro_pause)
         else:
             note += "; подтверждение нажать не удалось"
+    else:
+        # Без этой кнопки ссылка не создаётся, поэтому пишем прямо, что её не
+        # нашли, и сколько похожих кнопок вообще видно на странице.
+        note += f"; кнопку в окне не нашёл (похожих кнопок на странице: "
+        note += f"{_count_shareish(driver, market)})"
 
     deadline = time.monotonic() + cfg.element_timeout
 

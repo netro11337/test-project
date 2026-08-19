@@ -57,6 +57,19 @@ class Market:
         "//div[@role='dialog']//button[contains(., 'оделиться')]",
         "//button[contains(., 'оделиться') and contains(., 'товар')]",
         "//div[contains(@data-widget, 'modal')]//button[contains(., 'оделиться')]",
+        "//div[@role='dialog']//button[contains(., 'копировать')]",
+        "//button[contains(., 'Скопировать')]",
+        # Широкий вариант напоследок: уже нажатая кнопка из шапки исключается
+        # отдельно, поэтому сюда попадёт именно вторая, из окна.
+        "//button[contains(., 'оделиться')]",
+        "//*[self::a or self::div[@role='button']][contains(., 'оделиться')]",
+    )
+
+    # Признак того, что окно «Поделиться» открылось.
+    share_dialog: str = (
+        "//div[@role='dialog'] | //div[contains(@data-widget, 'modal')]"
+        " | //*[contains(text(), 'Поделиться списком')]"
+        " | //*[contains(text(), 'Поделиться товарами')]"
     )
 
     # Очистка корзины перед новым кругом: кнопка удаления рядом с «Выбрать
@@ -226,6 +239,9 @@ WB = Market(
         "//div[@role='dialog']//button[contains(., 'Скопировать')]",
         "//div[@role='dialog']//button[contains(., 'оделиться')]",
         "//button[contains(., 'оделиться') and contains(., 'товар')]",
+        "//button[contains(., 'копировать')]",
+        # Широкий вариант напоследок: уже нажатая иконка исключается отдельно.
+        "//button[contains(., 'оделиться')]",
     ),
     clear_side="left",
 )
